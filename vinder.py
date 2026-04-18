@@ -165,7 +165,7 @@ def download_url_api():
 @app.route('/')
 def index():
     # Pastikan path ini mengarah ke lokasi file HTML lu disimpan
-    return send_file('/sdcard/vinder.html')
+    return send_file('vinder.html')
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
