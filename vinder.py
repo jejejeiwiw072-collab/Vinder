@@ -123,6 +123,13 @@ def download_url_api():
         return send_file(filepath, as_attachment=True, download_name=safe_filename, mimetype='video/mp4')
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
+@app.route('/')
+def index():
+    # Ini supaya pas buka domain utama, file HTML lu kebaca
+    # Pastikan file vinder.html satu folder sama app.py
+    return send_file('vinder.html')
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    # Pakai host 0.0.0.0 supaya bisa diakses di Railway/Hosting
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
