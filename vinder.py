@@ -67,6 +67,9 @@ def search_videos_api():
         videos = resp.json().get('data', {}).get('videos', [])
         results = []
         for v in videos:
+            # === TAMBAHAN: Ambil URL cover (origin_cover prioritas) ===
+            cover_url = v.get('origin_cover') or v.get('cover') or ''
+            # =========================================================
             results.append({
                 'title': v.get('title', 'Video TikTok'),
                 'id': v.get('id', ''),
@@ -74,7 +77,8 @@ def search_videos_api():
                 'duration': format_durasi(v.get('duration')),
                 'channel': v.get('author', {}).get('nickname', 'User'),
                 'play': v.get('play', ''),
-                'hdplay': v.get('hdplay', '')
+                'hdplay': v.get('hdplay', ''),
+                'cover': cover_url   # <-- tambahan field
             })
         return jsonify({"status": "success", "data": results})
     except Exception as e:
