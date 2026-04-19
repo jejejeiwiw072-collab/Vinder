@@ -1,94 +1,128 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>VidFinder System</title>
-<style>
-  body { background: #0f0f0f; color: #e8e8e8; font-family: sans-serif; padding: 20px; }
-  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
-  input { width: 100%; padding: 10px; margin: 10px 0; background: #111; color: #fff; border: 1px solid #333; }
-  button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; cursor: pointer; }
-  .video-item { border-bottom: 1px solid #333; padding: 10px 0; }
-  select { background: #222; color: #fff; padding: 5px; margin-bottom: 10px; }
-</style>
-</head>
-<body>
-  <h2>VidFinder System</h2>
+import os
+import re
+import requests
+from flask import Flask, request, jsonify, send_file, after_this_request
+from flask_cors import CORS
 
-  <div class="card">
-    <h3>Cari Video</h3>
-    <label>Pilih Mode:</label>
-    <select id="modeSearch">
-      <option value="HYPE v1.2">HYPE v1.2 (No Limit)</option>
-      <option value="1080p">Standard (Max 720p)</option>
-    </select>
-    <input id="kw" type="text" placeholder="Keyword..."/>
-    <button onclick="doSearch()">Cari</button>
-    <div id="results"></div>
-  </div>
+app = Flask(__name__)
+CORS(app)
 
-  <div class="card">
-    <h3>Download by URL</h3>
-    <label>Pilih Mode:</label>
-    <select id="modeUrl">
-      <option value="HYPE v1.2">HYPE v1.2 (No Limit)</option>
-      <option value="1080p">Standard (Max 720p)</option>
-    </select>
-    <input id="dl-url" type="text" placeholder="https://tiktok.com/..."/>
-    <button onclick="doUrlDownload()">Download</button>
-  </div>
+DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Referer": "https://www.tikwm.com/",
+}
 
-<script>
-  async function doSearch() {
-    const kw = document.getElementById('kw').value;
-    const resp = await fetch('/api/search', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({keyword: kw, limit: 5})
-    });
-    const json = await resp.json();
-    const resEl = document.getElementById('results');
-    resEl.innerHTML = '';
-    json.data.forEach(v => {
-      const div = document.createElement('div');
-      div.className = 'video-item';
-      div.innerHTML = `
-        <p>${v.title}</p>
-        <button onclick='downloadSingle(${JSON.stringify(v)})'>Download</button>
-      `;
-      resEl.appendChild(div);
-    });
-  }
+def format_durasi(detik):
+    if detik is None: return "?"
+    m, s = divmod(int(detik), 60)
+    return f"{m}m{s:02d}s"
 
-  async function downloadSingle(v) {
-    const mode = document.getElementById('modeSearch').value;
-    const resp = await fetch('/api/download', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({...v, resolution: mode})
-    });
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = window.URL.createObjectURL(blob);
-    a.download = `${v.title}.mp4`;
-    a.click();
-  }
+def pilih_url_video(data_video, mode='1080p'):
+    """
+    LOGIKA GAP BENTO:
+    HYPE v1.2 -> HD Tanpa Batas (hdplay)
+    Standard -> Max 720p (play)
+    """
+    hd_url = data_video.get('hdplay', '').strip()
+    sd_url = data_video.get('play', '').strip()
 
-  async function doUrlDownload() {
-    const url = document.getElementById('dl-url').value;
-    const mode = document.getElementById('modeUrl').value;
-    const resp = await fetch('/api/download_url', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url: url, resolution: mode})
-    });
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = window.URL.createObjectURL(blob);
-    a.download = `video_download.mp4`;
-    a.click();
-  }
-</script>
-</body>
-</html>
+    if mode == 'HYPE v1.2':
+        url = hd_url if hd_url.startswith('http') else sd_url
+        return url, 'HYPE_V1.2_ULTRA'
+    else:
+        # Standard: Ambil kualitas biasa (play link umumnya terkompresi)
+        url = sd_url if sd_url.startswith('http') else hd_url
+        return url, 'STANDARD_720p'
+
+def _do_download(video_obj, mode='1080p'):
+    folder = 'downloads/'
+    os.makedirs(folder, exist_ok=True)
+
+    video_url, engine = pilih_url_video(video_obj, mode)
+    if not video_url:
+        raise ValueError("URL video tidak ditemukan")
+
+    safe_title = re.sub(r'[\\/*?:"<>|]', '', video_obj.get('title', 'video'))[:50].strip() or 'video'
+    prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
+    safe_filename = f"{prefix}{safe_title}_{video_obj.get('id', 'id')}.mp4"
+    filepath = os.path.join(folder, safe_filename)
+
+    # HYPE v1.2: Timeout lebih panjang & Turbo Chunking
+    timeout_val = (15, 120) if mode == 'HYPE v1.2' else (5, 60)
+    chunk_size = 1024 * 1024 if mode == 'HYPE v1.2' else 128 * 1024 # 1MB vs 128KB
+
+    r = requests.get(video_url, stream=True, timeout=timeout_val, headers=DOWNLOAD_HEADERS)
+    r.raise_for_status()
+
+    with open(filepath, 'wb') as f:
+        for chunk in r.iter_content(chunk_size=chunk_size):
+            if chunk:
+                f.write(chunk)
+
+    return filepath, safe_filename
+
+@app.route('/api/search', methods=['POST'])
+def search_videos_api():
+    data = request.json
+    query = data.get('keyword', '')
+    limit = int(data.get('limit', 5))
+    
+    try:
+        resp = requests.post("https://www.tikwm.com/api/feed/search", 
+                             data={"keywords": query, "count": limit, "HD": 1}, timeout=15)
+        api_data = resp.json()
+        videos = api_data.get('data', {}).get('videos', [])
+        
+        results = []
+        for v in videos:
+            results.append({
+                'title': v.get('title', 'Video TikTok'),
+                'id': v.get('id', ''),
+                'link': f"https://www.tiktok.com/@{v.get('author',{}).get('unique_id')}/video/{v.get('id')}",
+                'duration': format_durasi(v.get('duration')),
+                'channel': v.get('author', {}).get('nickname', 'Unknown'),
+                'play': v.get('play', ''),
+                'hdplay': v.get('hdplay', '')
+            })
+        return jsonify({"status": "success", "data": results})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)})
+
+@app.route('/api/download', methods=['POST'])
+def download_video_api():
+    data = request.json
+    mode = data.get('resolution', '1080p')
+    try:
+        filepath, safe_filename = _do_download(data, mode)
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+    @after_this_request
+    def remove_file(response):
+        if os.path.exists(filepath): os.remove(filepath)
+        return response
+
+    return send_file(filepath, as_attachment=True, download_name=safe_filename, mimetype='video/mp4')
+
+@app.route('/api/download_url', methods=['POST'])
+def download_url_api():
+    data = request.json
+    url = data.get('url', '').strip()
+    mode = data.get('resolution', '1080p')
+    
+    try:
+        resp = requests.post("https://www.tikwm.com/api/", data={"url": url, "hd": 1}, timeout=15)
+        d = resp.json().get('data', {})
+        video_obj = {'title': d.get('title', 'Video'), 'id': d.get('id', ''), 'play': d.get('play', ''), 'hdplay': d.get('hdplay', '')}
+        filepath, safe_filename = _do_download(video_obj, mode)
+        
+        @after_this_request
+        def remove_file(response):
+            if os.path.exists(filepath): os.remove(filepath)
+            return response
+        return send_file(filepath, as_attachment=True, download_name=safe_filename, mimetype='video/mp4')
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=5000)
