@@ -40,10 +40,16 @@ def lolos_filter(durasi_detik, filter_parsed):
     return True
 
 def pilih_url_video(data_video):
-    for key in ['play', 'hdplay', 'wmplay']:
-        url = data_video.get(key, '').strip()
-        if url and url.startswith('http'):
-            return url, key
+    """
+    Infinity Mode: Selalu ambil kualitas tertinggi (hdplay).
+    Jika tidak ada, fallback ke play.
+    """
+    url = data_video.get('hdplay', '').strip()
+    if url and url.startswith('http'):
+        return url, 'hdplay'
+    url = data_video.get('play', '').strip()
+    if url and url.startswith('http'):
+        return url, 'play'
     return None, None
 
 def _do_download(video_obj):
@@ -79,7 +85,7 @@ def _do_download(video_obj):
     r.raise_for_status()
 
     with open(filepath, 'wb') as f:
-        for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1MB chunk
+        for chunk in r.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
 
@@ -88,7 +94,6 @@ def _do_download(video_obj):
         raise ValueError("File terlalu kecil / corrupt")
 
     return filepath, safe_filename
-
 
 @app.route('/api/search', methods=['POST'])
 def search_videos_api():
@@ -143,12 +148,10 @@ def search_videos_api():
 
     return jsonify({"status": "success", "data": results})
 
-
 @app.route('/api/download', methods=['POST'])
 def download_video_api():
     """
-    Download video dari search result, lalu kirim file ke browser
-    supaya browser auto-trigger popup "Simpan file".
+    Download video dari search result, kirim file original (kualitas tertinggi).
     """
     video = request.json
     try:
@@ -171,13 +174,13 @@ def download_video_api():
         mimetype='video/mp4'
     )
 
-
 @app.route('/api/download_url', methods=['POST'])
 def download_url_api():
     """
-    Download dari URL TikTok langsung, kirim file ke browser.
+    Download dari URL TikTok langsung, kirim file original.
     """
-    url = request.json.get('url', '').strip()
+    data = request.json
+    url = data.get('url', '').strip()
     if not url:
         return jsonify({"status": "error", "msg": "URL kosong"}), 400
 
@@ -187,14 +190,14 @@ def download_url_api():
             data={"url": url, "hd": 1},
             timeout=(5, 15)
         )
-        data = resp.json()
+        api_data = resp.json()
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
-    if data.get('code') != 0:
+    if api_data.get('code') != 0:
         return jsonify({"status": "error", "msg": "API error dari tikwm"}), 502
 
-    d = data['data']
+    d = api_data['data']
     video_obj = {
         'title': d.get('title', 'Tanpa Judul'),
         'id': d.get('id', ''),
@@ -224,13 +227,10 @@ def download_url_api():
         mimetype='video/mp4'
     )
 
-
 @app.route('/')
 def index():
     return send_file('vinder.html')
 
-
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
