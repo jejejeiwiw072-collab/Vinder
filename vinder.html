@@ -5,90 +5,132 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>VidFinder System</title>
 <style>
-  body { background: #0f0f0f; color: #e8e8e8; font-family: sans-serif; padding: 20px; }
-  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
-  input { width: 100%; padding: 10px; margin: 10px 0; background: #111; color: #fff; border: 1px solid #333; }
-  button { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; cursor: pointer; }
-  .video-item { border-bottom: 1px solid #333; padding: 10px 0; }
-  select { background: #222; color: #fff; padding: 5px; margin-bottom: 10px; }
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #0f0f0f; --card: #1a1a1a; --border: #2a2a2a; --text: #e8e8e8;
+    --muted: #666; --accent: #2563eb; --success: #16a34a; --error: #dc2626;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; padding: 20px 16px 80px; }
+  h1 { font-family: 'Space Mono', monospace; font-size: 22px; margin-bottom: 24px; }
+  h1 span { color: var(--accent); }
+  .zakdev { position: absolute; right: 20px; font-family: 'Space Mono'; opacity: 0.6; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card-title { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+
+  input { width: 100%; background: #111; border: 1px solid var(--border); border-radius: 8px; padding: 12px; color: var(--text); margin-bottom: 10px; outline: none; transition: 0.2s; }
+  input:focus { border-color: var(--accent); }
+  button { width: 100%; padding: 13px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; transition: 0.2s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-dl { background: #1a2a1a; color: #4ade80; border: 1px solid #2a3a2a; margin-top: 8px; font-size: 13px; }
+
+  /* RESOLUTION POPUP */
+  .res-trigger { position: relative; }
+  .res-btn { width: auto; padding: 5px 10px; border-radius: 16px; background: #222; color: #fff; font-family: 'Space Mono'; font-size: 11px; font-weight: 700; }
+  .res-popup { display: none; position: absolute; right: 0; top: 100%; background: #1e1e1e; border-radius: 10px; z-index: 999; min-width: 200px; box-shadow: 0 8px 28px #000; }
+  .res-popup.open { display: block; }
+  .res-option { padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #2a2a2a; }
+  .res-opt-title { font-family: 'Space Mono'; font-size: 12px; font-weight: 700; color: #aaa; }
+  .res-opt-desc { color: #888; font-size: 10px; }
+  .res-option.selected .res-opt-title { color: var(--accent); }
+
+  /* BUBBLE SYSTEM */
+  #dl-container { position: fixed; bottom: 20px; left: 16px; right: 16px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+  .dl-bubble { background: #1c1c1c; border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 32px #000; }
+  .dl-bubble-icon { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #1a2540; }
+  .dl-bubble-label { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-progress { height: 3px; background: #2a2a2a; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .dl-progress-bar { height: 100%; background: var(--accent); width: 100%; animation: indeterminate 1.5s infinite; }
+  @keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+
+  .status-txt { font-size: 12px; margin-top: 8px; color: var(--muted); }
+  .video-item { background: #111; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
-  <h2>VidFinder System</h2>
+<div class="zakdev">zakdev_></div>
+<h1>🎬 Vid<span>Finder</span></h1>
 
-  <div class="card">
-    <h3>Cari Video</h3>
-    <label>Pilih Mode:</label>
-    <select id="modeSearch">
-      <option value="HYPE v1.2">HYPE v1.2 (No Limit)</option>
-      <option value="1080p">Standard (Max 720p)</option>
-    </select>
-    <input id="kw" type="text" placeholder="Keyword..."/>
-    <button onclick="doSearch()">Cari</button>
-    <div id="results"></div>
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">🔍 Cari Video</div>
+    <div class="res-trigger">
+      <button class="res-btn" onclick="togglePopup('popSearch')"><span id="lblSearch">HYPE v1.2</span> ▼</button>
+      <div class="res-popup" id="popSearch">
+        <div class="res-option selected" onclick="pick('Search','HYPE v1.2',this)">
+          <span class="res-opt-title">HYPE v1.2</span><br><span class="res-opt-desc">Kualitas Asli & Turbo Speed</span>
+        </div>
+        <div class="res-option" onclick="pick('Search','1080p',this)">
+          <span class="res-opt-title">1080p Standard</span><br><span class="res-opt-desc">Max 720p Compressed</span>
+        </div>
+      </div>
+    </div>
   </div>
+  <input id="kw" type="text" placeholder="Keyword pencarian..."/>
+  <button class="btn-primary" onclick="doSearch()">Cari Sekarang</button>
+  <div id="results" style="margin-top:10px;"></div>
+</div>
 
-  <div class="card">
-    <h3>Download by URL</h3>
-    <label>Pilih Mode:</label>
-    <select id="modeUrl">
-      <option value="HYPE v1.2">HYPE v1.2 (No Limit)</option>
-      <option value="1080p">Standard (Max 720p)</option>
-    </select>
-    <input id="dl-url" type="text" placeholder="https://tiktok.com/..."/>
-    <button onclick="doUrlDownload()">Download</button>
-  </div>
+<div class="card">
+  <div class="card-header"><div class="card-title">🔗 Download by URL</div></div>
+  <input id="dl-url" type="text" placeholder="https://tiktok.com/..."/>
+  <button class="btn-primary" onclick="doUrlDownload()">Download Langsung</button>
+</div>
+
+<div id="dl-container"></div>
 
 <script>
+  let config = { Search: 'HYPE v1.2', Url: 'HYPE v1.2' };
+
+  function togglePopup(id) { document.getElementById(id).classList.toggle('open'); }
+  function pick(sec, val, el) {
+    config[sec] = val; document.getElementById('lbl' + sec).innerText = val;
+    el.parentElement.querySelectorAll('.res-option').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected'); el.parentElement.classList.remove('open');
+  }
+
+  function createBubble(title) {
+    const wrap = document.getElementById('dl-container');
+    const el = document.createElement('div');
+    el.className = 'dl-bubble';
+    el.innerHTML = `<div class="dl-bubble-icon">⬇️</div><div style="flex:1; min-width:0;"><div class="dl-bubble-label">${title}</div><div class="dl-progress"><div class="dl-progress-bar"></div></div></div>`;
+    wrap.appendChild(el);
+    return el;
+  }
+
+  async function triggerDownload(endpoint, payload, title) {
+    const bubble = createBubble(title);
+    try {
+      const resp = await fetch(endpoint, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const blob = await resp.blob();
+      const a = document.createElement('a');
+      a.href = window.URL.createObjectURL(blob);
+      a.download = title.slice(0,20) + ".mp4";
+      a.click();
+      bubble.remove();
+    } catch (e) { alert("Gagal!"); bubble.remove(); }
+  }
+
   async function doSearch() {
     const kw = document.getElementById('kw').value;
-    const resp = await fetch('/api/search', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({keyword: kw, limit: 5})
-    });
+    const resp = await fetch('/api/search', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({keyword: kw}) });
     const json = await resp.json();
     const resEl = document.getElementById('results');
     resEl.innerHTML = '';
     json.data.forEach(v => {
-      const div = document.createElement('div');
-      div.className = 'video-item';
-      div.innerHTML = `
-        <p>${v.title}</p>
-        <button onclick='downloadSingle(${JSON.stringify(v)})'>Download</button>
-      `;
+      const div = document.createElement('div'); div.className = 'video-item';
+      div.innerHTML = `<div style="font-size:13px; font-weight:600;">${v.title}</div><div style="font-size:11px; color:#666;">${v.channel} | ${v.duration}</div>
+      <button class="btn-dl" onclick='downloadSingle(${JSON.stringify(v)})'>Download</button>`;
       resEl.appendChild(div);
     });
   }
 
-  async function downloadSingle(v) {
-    const mode = document.getElementById('modeSearch').value;
-    const resp = await fetch('/api/download', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({...v, resolution: mode})
-    });
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = window.URL.createObjectURL(blob);
-    a.download = `${v.title}.mp4`;
-    a.click();
-  }
-
-  async function doUrlDownload() {
-    const url = document.getElementById('dl-url').value;
-    const mode = document.getElementById('modeUrl').value;
-    const resp = await fetch('/api/download_url', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url: url, resolution: mode})
-    });
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = window.URL.createObjectURL(blob);
-    a.download = `video_download.mp4`;
-    a.click();
-  }
+  function downloadSingle(v) { triggerDownload('/api/download', {...v, resolution: config.Search}, v.title); }
+  function doUrlDownload() { triggerDownload('/api/download_url', {url: document.getElementById('dl-url').value, resolution: 'HYPE v1.2'}, "Video_URL"); }
 </script>
 </body>
 </html>
