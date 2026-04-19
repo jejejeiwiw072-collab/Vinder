@@ -48,7 +48,10 @@
   @keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
 
   .status-txt { font-size: 12px; margin-top: 8px; color: var(--muted); }
-  .video-item { background: #111; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+  .video-item { background: #111; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
+  /* === TAMBAHAN STYLE THUMBNAIL === */
+  .video-thumb { width: 80px; height: 80px; border-radius: 8px; object-fit: cover; background: #1e1e1e; border: 1px solid var(--border); flex-shrink: 0; }
+  .video-info { flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
@@ -123,8 +126,16 @@
     resEl.innerHTML = '';
     json.data.forEach(v => {
       const div = document.createElement('div'); div.className = 'video-item';
-      div.innerHTML = `<div style="font-size:13px; font-weight:600;">${v.title}</div><div style="font-size:11px; color:#666;">${v.channel} | ${v.duration}</div>
-      <button class="btn-dl" onclick='downloadSingle(${JSON.stringify(v)})'>Download</button>`;
+      // === TAMBAHAN: Menampilkan gambar cover ===
+      div.innerHTML = `
+        <img class="video-thumb" src="${v.cover || 'https://via.placeholder.com/80?text=No+Cover'}" alt="thumbnail" onerror="this.src='https://via.placeholder.com/80?text=No+Cover'">
+        <div class="video-info">
+          <div style="font-size:13px; font-weight:600;">${v.title}</div>
+          <div style="font-size:11px; color:#666;">${v.channel} | ${v.duration}</div>
+          <button class="btn-dl" onclick='downloadSingle(${JSON.stringify(v)})'>Download</button>
+        </div>
+      `;
+      // ========================================
       resEl.appendChild(div);
     });
   }
