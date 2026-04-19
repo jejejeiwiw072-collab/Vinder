@@ -10,8 +10,6 @@ CORS(app)
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Referer": "https://www.tikwm.com/",
-    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
 }
 
 def format_durasi(detik):
@@ -19,79 +17,47 @@ def format_durasi(detik):
     m, s = divmod(int(detik), 60)
     return f"{m}m{s:02d}s"
 
-def parse_filter(filter_str):
-    if not filter_str: return None
-    filter_str = filter_str.strip()
-    m1 = re.match(r'^>(\d+)m$', filter_str)
-    if m1: return ('gt', int(m1.group(1)) * 60)
-    m2 = re.match(r'^<(\d+)m$', filter_str)
-    if m2: return ('lt', int(m2.group(1)) * 60)
-    m3 = re.match(r'^(\d+)m-(\d+)m$', filter_str)
-    if m3: return ('range', int(m3.group(1)) * 60, int(m3.group(2)) * 60)
-    return None
+def pilih_url_video(data_video, mode='1080p'):
+    """
+    LOGIKA GAP BENTO:
+    HYPE v1.2 -> HD Tanpa Batas (hdplay)
+    Standard -> Max 720p (play)
+    """
+    hd_url = data_video.get('hdplay', '').strip()
+    sd_url = data_video.get('play', '').strip()
 
-def lolos_filter(durasi_detik, filter_parsed):
-    if filter_parsed is None: return True
-    if durasi_detik is None: return False
-    t = filter_parsed[0]
-    if t == 'gt': return durasi_detik > filter_parsed[1]
-    if t == 'lt': return durasi_detik < filter_parsed[1]
-    if t == 'range': return filter_parsed[1] <= durasi_detik <= filter_parsed[2]
-    return True
+    if mode == 'HYPE v1.2':
+        url = hd_url if hd_url.startswith('http') else sd_url
+        return url, 'HYPE_V1.2_ULTRA'
+    else:
+        # Standard: Ambil kualitas biasa (play link umumnya terkompresi)
+        url = sd_url if sd_url.startswith('http') else hd_url
+        return url, 'STANDARD_720p'
 
-def pilih_url_video(data_video):
-    """
-    Infinity Mode: Selalu ambil kualitas tertinggi (hdplay).
-    Jika tidak ada, fallback ke play.
-    """
-    url = data_video.get('hdplay', '').strip()
-    if url and url.startswith('http'):
-        return url, 'hdplay'
-    url = data_video.get('play', '').strip()
-    if url and url.startswith('http'):
-        return url, 'play'
-    return None, None
-
-def _do_download(video_obj):
-    """
-    Core download logic — returns (filepath, safe_filename) or raises Exception.
-    """
+def _do_download(video_obj, mode='1080p'):
     folder = 'downloads/'
     os.makedirs(folder, exist_ok=True)
 
-    video_url, _ = pilih_url_video(video_obj)
-
-    if not video_url:
-        try:
-            resp = requests.post(
-                "https://www.tikwm.com/api/",
-                data={"url": video_obj['link'], "hd": 1},
-                timeout=(5, 15)
-            )
-            api_data = resp.json()
-            if api_data.get('code') == 0:
-                video_url, _ = pilih_url_video(api_data['data'])
-        except Exception:
-            pass
-
+    video_url, engine = pilih_url_video(video_obj, mode)
     if not video_url:
         raise ValueError("URL video tidak ditemukan")
 
     safe_title = re.sub(r'[\\/*?:"<>|]', '', video_obj.get('title', 'video'))[:50].strip() or 'video'
-    safe_filename = f"{safe_title}_{video_obj.get('id', 'id')}.mp4"
+    prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
+    safe_filename = f"{prefix}{safe_title}_{video_obj.get('id', 'id')}.mp4"
     filepath = os.path.join(folder, safe_filename)
 
-    r = requests.get(video_url, stream=True, timeout=(5, 60), headers=DOWNLOAD_HEADERS)
+    # HYPE v1.2: Timeout lebih panjang & Turbo Chunking
+    timeout_val = (15, 120) if mode == 'HYPE v1.2' else (5, 60)
+    chunk_size = 1024 * 1024 if mode == 'HYPE v1.2' else 128 * 1024 # 1MB vs 128KB
+
+    r = requests.get(video_url, stream=True, timeout=timeout_val, headers=DOWNLOAD_HEADERS)
     r.raise_for_status()
 
     with open(filepath, 'wb') as f:
-        for chunk in r.iter_content(chunk_size=1024 * 1024):
+        for chunk in r.iter_content(chunk_size=chunk_size):
             if chunk:
                 f.write(chunk)
-
-    if os.path.getsize(filepath) < 10240:
-        os.remove(filepath)
-        raise ValueError("File terlalu kecil / corrupt")
 
     return filepath, safe_filename
 
@@ -100,137 +66,63 @@ def search_videos_api():
     data = request.json
     query = data.get('keyword', '')
     limit = int(data.get('limit', 5))
-    filter_parsed = parse_filter(data.get('filter', ''))
-
-    results = []
-    cursor, page, max_page = 0, 0, 5
-
-    while len(results) < limit and page < max_page:
-        try:
-            resp = requests.post(
-                "https://www.tikwm.com/api/feed/search",
-                data={"keywords": query, "count": 50, "cursor": cursor, "HD": 1},
-                timeout=(5, 15)
-            )
-            api_data = resp.json()
-        except Exception as e:
-            return jsonify({"status": "error", "msg": str(e)})
-
-        if api_data.get('code') != 0:
-            break
+    
+    try:
+        resp = requests.post("https://www.tikwm.com/api/feed/search", 
+                             data={"keywords": query, "count": limit, "HD": 1}, timeout=15)
+        api_data = resp.json()
         videos = api_data.get('data', {}).get('videos', [])
-        if not videos:
-            break
-
+        
+        results = []
         for v in videos:
-            durasi = v.get('duration')
-            durasi = int(durasi) if durasi else None
-            if not lolos_filter(durasi, filter_parsed):
-                continue
-
-            uid = v.get('author', {}).get('unique_id', '')
-            vid_id = v.get('id', '')
             results.append({
-                'title': v.get('title', 'Tanpa Judul'),
-                'id': vid_id,
-                'link': f"https://www.tiktok.com/@{uid}/video/{vid_id}",
-                'duration': format_durasi(durasi),
+                'title': v.get('title', 'Video TikTok'),
+                'id': v.get('id', ''),
+                'link': f"https://www.tiktok.com/@{v.get('author',{}).get('unique_id')}/video/{v.get('id')}",
+                'duration': format_durasi(v.get('duration')),
                 'channel': v.get('author', {}).get('nickname', 'Unknown'),
                 'play': v.get('play', ''),
-                'hdplay': v.get('hdplay', ''),
-                'wmplay': v.get('wmplay', '')
+                'hdplay': v.get('hdplay', '')
             })
-            if len(results) >= limit:
-                break
-
-        cursor = api_data.get('data', {}).get('cursor', 0)
-        page += 1
-
-    return jsonify({"status": "success", "data": results})
+        return jsonify({"status": "success", "data": results})
+    except Exception as e:
+        return jsonify({"status": "error", "msg": str(e)})
 
 @app.route('/api/download', methods=['POST'])
 def download_video_api():
-    """
-    Download video dari search result, kirim file original (kualitas tertinggi).
-    """
-    video = request.json
+    data = request.json
+    mode = data.get('resolution', '1080p')
     try:
-        filepath, safe_filename = _do_download(video)
+        filepath, safe_filename = _do_download(data, mode)
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
     @after_this_request
     def remove_file(response):
-        try:
-            os.remove(filepath)
-        except Exception:
-            pass
+        if os.path.exists(filepath): os.remove(filepath)
         return response
 
-    return send_file(
-        filepath,
-        as_attachment=True,
-        download_name=safe_filename,
-        mimetype='video/mp4'
-    )
+    return send_file(filepath, as_attachment=True, download_name=safe_filename, mimetype='video/mp4')
 
 @app.route('/api/download_url', methods=['POST'])
 def download_url_api():
-    """
-    Download dari URL TikTok langsung, kirim file original.
-    """
     data = request.json
     url = data.get('url', '').strip()
-    if not url:
-        return jsonify({"status": "error", "msg": "URL kosong"}), 400
-
+    mode = data.get('resolution', '1080p')
+    
     try:
-        resp = requests.post(
-            "https://www.tikwm.com/api/",
-            data={"url": url, "hd": 1},
-            timeout=(5, 15)
-        )
-        api_data = resp.json()
+        resp = requests.post("https://www.tikwm.com/api/", data={"url": url, "hd": 1}, timeout=15)
+        d = resp.json().get('data', {})
+        video_obj = {'title': d.get('title', 'Video'), 'id': d.get('id', ''), 'play': d.get('play', ''), 'hdplay': d.get('hdplay', '')}
+        filepath, safe_filename = _do_download(video_obj, mode)
+        
+        @after_this_request
+        def remove_file(response):
+            if os.path.exists(filepath): os.remove(filepath)
+            return response
+        return send_file(filepath, as_attachment=True, download_name=safe_filename, mimetype='video/mp4')
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
-
-    if api_data.get('code') != 0:
-        return jsonify({"status": "error", "msg": "API error dari tikwm"}), 502
-
-    d = api_data['data']
-    video_obj = {
-        'title': d.get('title', 'Tanpa Judul'),
-        'id': d.get('id', ''),
-        'link': url,
-        'play': d.get('play', ''),
-        'hdplay': d.get('hdplay', ''),
-        'wmplay': d.get('wmplay', '')
-    }
-
-    try:
-        filepath, safe_filename = _do_download(video_obj)
-    except Exception as e:
-        return jsonify({"status": "error", "msg": str(e)}), 500
-
-    @after_this_request
-    def remove_file(response):
-        try:
-            os.remove(filepath)
-        except Exception:
-            pass
-        return response
-
-    return send_file(
-        filepath,
-        as_attachment=True,
-        download_name=safe_filename,
-        mimetype='video/mp4'
-    )
-
-@app.route('/')
-def index():
-    return send_file('vinder.html')
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000)
