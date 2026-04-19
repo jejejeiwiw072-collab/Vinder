@@ -110,7 +110,6 @@
   .btn-dl:hover { background: #22351f; }
   .btn-dl:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* Hasil search */
   #results { margin-top: 8px; }
 
   .video-item {
@@ -237,21 +236,103 @@
     flex-shrink: 0;
   }
 
-  /* Status teks kecil */
   .status-txt { font-size: 12px; margin-top: 8px; color: var(--muted); min-height: 18px; }
   .status-txt.ok  { color: #4ade80; }
   .status-txt.err { color: #f87171; }
+
+  /* ===== TOMBOL RESOLUSI ===== */
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .card-header .card-title { margin-bottom: 0; }
+
+  .res-trigger { position: relative; display: inline-block; }
+  .res-btn {
+    width: auto;
+    padding: 5px 10px;
+    border-radius: 16px;
+    border: none;
+    background: #222;
+    color: #fff;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.4);
+    transition: background 0.15s;
+    min-width: 60px;
+    min-height: 30px;
+    justify-content: center;
+  }
+  .res-btn:hover { background: #2a2a2a; }
+  .res-btn .arrow { font-size: 9px; opacity: 0.5; }
+
+  .res-popup {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    background: #1e1e1e;
+    border: none;
+    border-radius: 10px;
+    overflow: hidden;
+    z-index: 9999;
+    min-width: 100px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.5);
+  }
+  .res-popup.open { display: block; animation: fadeIn 0.15s ease; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .res-option {
+    padding: 11px 18px;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #aaa;
+    transition: background 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .res-option:hover { background: #2a2a2a; color: #fff; }
+  .res-option.selected { color: var(--accent); }
+  .res-option.selected::after { content: '✓'; font-size: 11px; }
+  .res-divider { height: 1px; background: #2a2a2a; }
 </style>
 </head>
 <body>
-<h2 style="position: absolute;
-right: 20px;"> zakdev_> </h2>
+<h2 style="position: absolute; right: 20px;"> zakdev_> </h2>
 
 <h1>🎬 Vid<span>Finder</span></h1>
 
 <!-- SEARCH CARD -->
 <div class="card">
-  <div class="card-title">🔍 Cari Video</div>
+  <div class="card-header">
+    <div class="card-title">🔍 Cari Video</div>
+    <div class="res-trigger" id="triggerSearch">
+      <button class="res-btn" onclick="togglePopup('popupSearch')">
+        <span id="labelSearch">1080p</span>
+        <span class="arrow">▼</span>
+      </button>
+      <div class="res-popup" id="popupSearch">
+        <div class="res-option selected" onclick="pickRes('Search','1080p',this)">1080p</div>
+        <div class="res-divider"></div>
+        <div class="res-option" onclick="pickRes('Search','720p',this)">720p</div>
+        <div class="res-divider"></div>
+        <div class="res-option" onclick="pickRes('Search','480p',this)">480p</div>
+      </div>
+    </div>
+  </div>
   <input id="kw" type="text" placeholder="Keyword pencarian..." />
   <input id="filter" type="text" placeholder="Filter durasi: <1m, >3m (opsional)" />
   <input id="limit" type="number" value="" min="1" max="50" placeholder="jumlah hasil(1-50)"/>
@@ -262,7 +343,22 @@ right: 20px;"> zakdev_> </h2>
 
 <!-- DOWNLOAD URL CARD -->
 <div class="card">
-  <div class="card-title">🔗 Download by URL</div>
+  <div class="card-header">
+    <div class="card-title">🔗 Download by URL</div>
+    <div class="res-trigger" id="triggerUrl">
+      <button class="res-btn" onclick="togglePopup('popupUrl')">
+        <span id="labelUrl">1080p</span>
+        <span class="arrow">▼</span>
+      </button>
+      <div class="res-popup" id="popupUrl">
+        <div class="res-option selected" onclick="pickRes('Url','1080p',this)">1080p</div>
+        <div class="res-divider"></div>
+        <div class="res-option" onclick="pickRes('Url','720p',this)">720p</div>
+        <div class="res-divider"></div>
+        <div class="res-option" onclick="pickRes('Url','480p',this)">480p</div>
+      </div>
+    </div>
+  </div>
   <input id="dl-url" type="text" placeholder="https://vm.tiktok.com/..." />
   <button class="btn-primary" id="btn-dlurl" onclick="doDownloadUrl()">Download Langsung</button>
   <div class="status-txt" id="url-status"></div>
@@ -272,6 +368,32 @@ right: 20px;"> zakdev_> </h2>
 <div id="dl-container"></div>
 
 <script>
+  const resSelected = { Search: '1080p', Url: '1080p' };
+
+  document.addEventListener('click', function(e) {
+    ['popupSearch','popupUrl'].forEach(id => {
+      const popup = document.getElementById(id);
+      if (popup && !popup.closest('.res-trigger').contains(e.target)) {
+        popup.classList.remove('open');
+      }
+    });
+  });
+
+  function togglePopup(popupId) {
+    const popup = document.getElementById(popupId);
+    const isOpen = popup.classList.contains('open');
+    document.querySelectorAll('.res-popup').forEach(p => p.classList.remove('open'));
+    if (!isOpen) popup.classList.add('open');
+  }
+
+  function pickRes(section, res, el) {
+    resSelected[section] = res;
+    document.getElementById('label' + section).innerText = res;
+    el.closest('.res-popup').querySelectorAll('.res-option').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+    el.closest('.res-popup').classList.remove('open');
+  }
+
   // ===== BUBBLE SYSTEM =====
   function createBubble(title) {
     const wrap = document.getElementById('dl-container');
@@ -305,17 +427,12 @@ right: 20px;"> zakdev_> </h2>
     };
   }
 
-  function closeBubble(btn) {
-    const el = btn.closest('.dl-bubble');
-    fadeOutBubble(el);
-  }
-
+  function closeBubble(btn) { fadeOutBubble(btn.closest('.dl-bubble')); }
   function fadeOutBubble(el) {
     el.classList.add('fade-out');
     setTimeout(() => el.remove(), 400);
   }
 
-  // ===== DOWNLOAD TRIGGER =====
   async function triggerDownload(endpoint, payload, title) {
     const bubble = createBubble(title.length > 40 ? title.slice(0, 40) + '…' : title);
     try {
@@ -324,19 +441,15 @@ right: 20px;"> zakdev_> </h2>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.msg || `HTTP ${resp.status}`);
       }
-
-      // Cek apakah response adalah file (video/mp4)
       const ct = resp.headers.get('Content-Type') || '';
       if (ct.includes('video') || ct.includes('octet-stream')) {
         const blob = await resp.blob();
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
-        // Coba ambil nama file dari header
         const cd   = resp.headers.get('Content-Disposition') || '';
         const fnMatch = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)/i);
         a.download = fnMatch ? decodeURIComponent(fnMatch[1].trim()) : title.slice(0, 50) + '.mp4';
@@ -356,13 +469,13 @@ right: 20px;"> zakdev_> </h2>
     }
   }
 
-  // ===== SEARCH =====
   async function doSearch() {
     const kw = document.getElementById('kw').value.trim();
     if (!kw) return;
     const btn = document.getElementById('btn-search');
     const status = document.getElementById('search-status');
     const resultsEl = document.getElementById('results');
+    const resolution = resSelected['Search'];
 
     btn.disabled = true;
     btn.textContent = 'Mencari...';
@@ -377,16 +490,13 @@ right: 20px;"> zakdev_> </h2>
         body: JSON.stringify({
           keyword: kw,
           limit: parseInt(document.getElementById('limit').value) || 5,
-          filter: document.getElementById('filter').value.trim()
+          filter: document.getElementById('filter').value.trim(),
+          resolution
         })
       });
       const data = await resp.json();
       if (data.status !== 'success') throw new Error(data.msg);
-
-      if (!data.data.length) {
-        status.textContent = 'Tidak ada hasil.';
-        return;
-      }
+      if (!data.data.length) { status.textContent = 'Tidak ada hasil.'; return; }
 
       status.textContent = `${data.data.length} video ditemukan`;
       status.className = 'status-txt ok';
@@ -400,7 +510,7 @@ right: 20px;"> zakdev_> </h2>
             <span>⏱ ${v.duration}</span>
             <span>👤 ${v.channel}</span>
           </div>
-          <button class="btn-dl" onclick='downloadVideo(${JSON.stringify(v)}, this)'>
+          <button class="btn-dl" onclick='downloadVideo(${JSON.stringify(v)}, "${resolution}", this)'>
             ⬇️ Download
           </button>
         `;
@@ -415,40 +525,33 @@ right: 20px;"> zakdev_> </h2>
     }
   }
 
-  function downloadVideo(v, btn) {
+  function downloadVideo(v, resolution, btn) {
     btn.disabled = true;
     btn.textContent = '⏳ Memproses...';
-    triggerDownload('/api/download', v, v.title).finally(() => {
+    triggerDownload('/api/download', { ...v, resolution }, v.title).finally(() => {
       btn.disabled = false;
       btn.textContent = '⬇️ Download';
     });
   }
 
-  // ===== DOWNLOAD URL =====
   async function doDownloadUrl() {
     const url = document.getElementById('dl-url').value.trim();
     if (!url) return;
     const btn = document.getElementById('btn-dlurl');
-    const status = document.getElementById('url-status');
+    const resolution = resSelected['Url'];
 
     btn.disabled = true;
     btn.textContent = 'Memproses...';
-    status.textContent = '';
-    status.className = 'status-txt';
+    document.getElementById('url-status').textContent = '';
 
-    await triggerDownload('/api/download_url', { url }, url);
+    await triggerDownload('/api/download_url', { url, resolution }, url);
 
     btn.disabled = false;
     btn.textContent = 'Download Langsung';
   }
 
-  // Enter key search
-  document.getElementById('kw').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doSearch();
-  });
-  document.getElementById('dl-url').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doDownloadUrl();
-  });
+  document.getElementById('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') doDownloadUrl(); });
 </script>
 </body>
 </html>
