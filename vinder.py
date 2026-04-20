@@ -14,10 +14,6 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-DOWNLOAD_FOLDER = 'downloads/'
-if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER)
-
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Referer": "https://www.tikwm.com/",
@@ -83,42 +79,40 @@ def get_video_api():
         logger.warning("⚠️ Download failed: No URL provided")
         return "URL tidak ditemukan", 400
 
-    logger.info(f"📥 Starting download: {title} ({mode})")
+    logger.info(f"📥 Streaming download: {title} ({mode})")
     try:
+        # Langsung streaming dari TikTok ke User (Streaming Proxy)
+        r = requests.get(video_url, stream=True, timeout=60, headers=DOWNLOAD_HEADERS)
+        r.raise_for_status()
+
         safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:30].strip() or 'video'
         timestamp = int(time.time() * 1000)
         prefix = "HYPE" if "HYPE" in mode else "STD"
         safe_filename = f"[{prefix}]_{safe_title}_{timestamp}.mp4"
-        filepath = os.path.join(DOWNLOAD_FOLDER, safe_filename)
-
-        # Download dari TikTok ke Server
-        logger.info(f"🔗 Fetching from TikTok: {video_url[:50]}...")
-        r = requests.get(video_url, stream=True, timeout=120, headers=DOWNLOAD_HEADERS)
-        r.raise_for_status()
-
-        with open(filepath, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1024*1024):
-                if chunk: f.write(chunk)
-        
-        logger.info(f"💾 File saved locally: {filepath} ({os.path.getsize(filepath)} bytes)")
 
         def generate():
             try:
-                with open(filepath, 'rb') as f:
-                    yield from f
+                # Ambil data dari TikTok per chunk dan langsung kirim ke client
+                for chunk in r.iter_content(chunk_size=1024*1024):
+                    if chunk:
+                        yield chunk
                 logger.info(f"📤 Stream to client finished: {safe_filename}")
-            finally:
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                    logger.info(f"🗑️ Temporary file deleted: {filepath}")
+            except Exception as e:
+                logger.error(f"💥 Streaming interrupted: {str(e)}")
+
+        # Ambil content length dari tiktok asal jika ada biar browser tau progress download-nya
+        content_length = r.headers.get('Content-Length')
+        
+        headers = {
+            "Content-Disposition": f'attachment; filename="{safe_filename}"',
+            "Content-Type": "video/mp4"
+        }
+        if content_length:
+            headers["Content-Length"] = content_length
 
         return Response(
             stream_with_context(generate()),
-            headers={
-                "Content-Disposition": f'attachment; filename="{safe_filename}"',
-                "Content-Type": "video/mp4",
-                "Content-Length": os.path.getsize(filepath)
-            }
+            headers=headers
         )
     except Exception as e:
         err_msg = f"Download Error: {str(e)}"
