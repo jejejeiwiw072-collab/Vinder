@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="id">
  <head>
@@ -118,21 +119,47 @@
     background: #111;
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 14px;
+    padding: 12px;
     margin-bottom: 10px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .video-thumb {
+    width: 85px;
+    height: 120px;
+    background: #222;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .video-info {
+    flex: 1;
+    min-width: 0;
   }
   .video-title {
     font-size: 13px;
     font-weight: 600;
     line-height: 1.4;
     margin-bottom: 6px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .video-meta {
     font-size: 11px;
     color: var(--muted);
     display: flex;
-    gap: 12px;
-    margin-bottom: 2px;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .meta-tag {
+    background: #1a1a1a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #333;
   }
 
   /* ===== DOWNLOAD BUBBLE ===== */
@@ -242,6 +269,31 @@
   .status-txt.ok  { color: #4ade80; }
   .status-txt.err { color: #f87171; }
 
+  /* ===== INPUT WITH CLEAR BUTTON ===== */
+  .input-wrapper {
+    position: relative;
+    width: 100%;
+    margin-bottom: 10px;
+  }
+  .input-wrapper input {
+    margin-bottom: 0;
+    padding-right: 40px;
+  }
+  .clear-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    cursor: pointer;
+    display: none;
+    font-size: 18px;
+    padding: 5px;
+    user-select: none;
+    line-height: 1;
+  }
+  .clear-btn:hover { color: var(--text); }
+
   /* ===== TOMBOL RESOLUSI ===== */
   .card-header {
     display: flex;
@@ -336,6 +388,41 @@
   }
   
   .res-divider { height: 1px; background: #2a2a2a; }
+
+  /* ===== PREVIEW CARD URL ===== */
+  #url-preview-container { margin-top: 14px; display: none; }
+  .preview-card {
+    background: #111;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    animation: fadeIn 0.3s ease;
+  }
+  .preview-thumb {
+    width: 60px;
+    height: 80px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+  .preview-info { flex: 1; min-width: 0; }
+  .preview-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .preview-meta {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
   </style>
  </head>
  <body>
@@ -384,9 +471,18 @@
      </div>
     </div>
    </div>
-   <input id="kw" placeholder="Keyword pencarian..." type="text"/>
-   <input id="filter" placeholder="Filter durasi: &lt;1m, &gt;3m (opsional)" type="text"/>
-   <input id="limit" max="50" min="1" placeholder="jumlah hasil(1-50)" type="number" value=""/>
+   <div class="input-wrapper">
+    <input id="kw" placeholder="Keyword pencarian..." type="text"/>
+    <span class="clear-btn" id="clear-kw" onclick="clearInput('kw')">✕</span>
+   </div>
+   <div class="input-wrapper">
+    <input id="filter" placeholder="Filter durasi: <1m, >3m (opsional)" type="text"/>
+    <span class="clear-btn" id="clear-filter" onclick="clearInput('filter')">✕</span>
+   </div>
+   <div class="input-wrapper">
+    <input id="limit" max="50" min="1" placeholder="jumlah hasil(1-50)" type="number" value=""/>
+    <span class="clear-btn" id="clear-limit" onclick="clearInput('limit')">✕</span>
+   </div>
    <button class="btn-primary" id="btn-search" onclick="doSearch()">
     Cari Sekarang
    </button>
@@ -431,7 +527,11 @@
      </div>
     </div>
    </div>
-   <input id="dl-url" placeholder="https://vm.tiktok.com/..." type="text"/>
+   <div class="input-wrapper">
+    <input id="dl-url" placeholder="https://vm.tiktok.com/..." type="text"/>
+    <span class="clear-btn" id="clear-dl-url" onclick="clearInput('dl-url')">✕</span>
+   </div>
+   <div id="url-preview-container"></div>
    <button class="btn-primary" id="btn-dlurl" onclick="doDownloadUrl()">
     Download Langsung
    </button>
@@ -466,6 +566,67 @@
     el.classList.add('selected');
     el.closest('.res-popup').classList.remove('open');
   }
+
+  // ===== CLEAR BUTTON LOGIC =====
+  function clearInput(id) {
+    const el = document.getElementById(id);
+    el.value = '';
+    el.focus();
+    toggleClearBtn(id);
+    if (id === 'dl-url') document.getElementById('url-preview-container').style.display = 'none';
+  }
+  function toggleClearBtn(id) {
+    const el = document.getElementById(id);
+    const btn = document.getElementById('clear-' + id);
+    if (btn) btn.style.display = el.value ? 'block' : 'none';
+    if (id === 'dl-url' && el.value.startsWith('http')) {
+       // Auto preview if URL
+       setTimeout(() => autoPreview(el.value), 500);
+    }
+  }
+
+  let lastUrl = '';
+  async function autoPreview(url) {
+    if (url === lastUrl) return;
+    if (!url.includes('tiktok.com')) return;
+    lastUrl = url;
+    
+    const container = document.getElementById('url-preview-container');
+    container.style.display = 'block';
+    container.innerHTML = '<div style="font-size:11px; color:var(--muted)">🔍 Mengintip link...</div>';
+
+    try {
+      const resp = await fetch('/api/download_url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, resolution: resSelected['Url'] })
+      });
+      const data = await resp.json();
+      if (data.status === 'success') {
+        container.innerHTML = `
+          <div class="preview-card">
+            <img src="${data.cover}" class="preview-thumb">
+            <div class="preview-info">
+              <div class="preview-title">${data.title}</div>
+              <div class="preview-meta">
+                <span class="meta-tag">👤 ${data.author}</span>
+                <span class="meta-tag">⏱ ${data.duration}</span>
+                <span class="meta-tag">💾 ${data.size}</span>
+              </div>
+            </div>
+            <div style="color:var(--accent); font-size:18px;">⬇️</div>
+          </div>
+        `;
+      } else {
+        container.style.display = 'none';
+      }
+    } catch(e) {
+      container.style.display = 'none';
+    }
+  }
+  ['kw', 'filter', 'limit', 'dl-url'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => toggleClearBtn(id));
+  });
 
   // ===== BUBBLE SYSTEM =====
   function createBubble(title) {
@@ -506,40 +667,11 @@
     setTimeout(() => el.remove(), 400);
   }
 
-  async function triggerDownload(endpoint, payload, title) {
-    const bubble = createBubble(title.length > 40 ? title.slice(0, 40) + '…' : title);
-    try {
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.msg || `HTTP ${resp.status}`);
-      }
-      const ct = resp.headers.get('Content-Type') || '';
-      if (ct.includes('video') || ct.includes('octet-stream')) {
-        const blob = await resp.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        const cd   = resp.headers.get('Content-Disposition') || '';
-        const fnMatch = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)/i);
-        a.download = fnMatch ? decodeURIComponent(fnMatch[1].trim()) : title.slice(0, 50) + '.mp4';
-        a.href = url;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        bubble.setSuccess();
-      } else {
-        const json = await resp.json();
-        if (json.status === 'error') throw new Error(json.msg);
-        bubble.setSuccess();
-      }
-    } catch (e) {
-      bubble.setError(e.message);
-    }
+  function getDownloadUrl(v, resolution) {
+    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
+    // Tambahin timestamp (&t=...) biar jalurnya baru terus (Cache Buster)
+    const t = new Date().getTime();
+    return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
   }
 
   async function doSearch() {
@@ -550,6 +682,7 @@
     const resultsEl = document.getElementById('results');
     const resolution = resSelected['Search'];
 
+    console.log(`[Search] Keyword: ${kw}, Resolution: ${resolution}`);
     btn.disabled = true;
     btn.textContent = 'Mencari...';
     status.textContent = 'Menghubungi server...';
@@ -567,64 +700,25 @@
           resolution
         })
       });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
+      }
+
       const data = await resp.json();
-      if (data.status !== 'success') throw new Error(data.msg);
-      if (!data.data.length) { status.textContent = 'Tidak ada hasil.'; return; }
+      console.log('[Search] Response Data:', data);
+
+      if (data.status !== 'success') throw new Error(data.msg || 'Gagal mengambil data dari API');
+      if (!data.data.length) { status.textContent = 'Tidak ditemukan — coba kata kunci lain'; return; }
 
       status.textContent = `${data.data.length} video ditemukan`;
       status.className = 'status-txt ok';
 
       data.data.forEach(v => {
+        const dUrl = getDownloadUrl(v, resolution);
         const div = document.createElement('div');
         div.className = 'video-item';
         div.innerHTML = `
-          <div class="video-title">${v.title}</div>
-          <div class="video-meta">
-            <span>⏱ ${v.duration}</span>
-            <span>👤 ${v.channel}</span>
-          </div>
-          <button class="btn-dl" onclick='downloadVideo(${JSON.stringify(v)}, "${resolution}", this)'>
-            ⬇️ Download
-          </button>
-        `;
-        resultsEl.appendChild(div);
-      });
-    } catch (e) {
-      status.textContent = 'Error: ' + e.message;
-      status.className = 'status-txt err';
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Cari Sekarang';
-    }
-  }
-
-  function downloadVideo(v, resolution, btn) {
-    btn.disabled = true;
-    btn.textContent = '⏳ Memproses...';
-    triggerDownload('/api/download', { ...v, resolution }, v.title).finally(() => {
-      btn.disabled = false;
-      btn.textContent = '⬇️ Download';
-    });
-  }
-
-  async function doDownloadUrl() {
-    const url = document.getElementById('dl-url').value.trim();
-    if (!url) return;
-    const btn = document.getElementById('btn-dlurl');
-    const resolution = resSelected['Url'];
-
-    btn.disabled = true;
-    btn.textContent = 'Memproses...';
-    document.getElementById('url-status').textContent = '';
-
-    await triggerDownload('/api/download_url', { url, resolution }, url);
-
-    btn.disabled = false;
-    btn.textContent = 'Download Langsung';
-  }
-
-  document.getElementById('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
-  document.getElementById('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') doDownloadUrl(); });
-  </script>
- </body>
-</html>
+          <img src="${v.cover}" class="video-thumb" onerror="this.src='https://placehold.co/85x120/111/444?text=Video'">
+          <div class="vid
