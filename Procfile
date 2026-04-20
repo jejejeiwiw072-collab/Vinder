@@ -1,1 +1,2 @@
-web: gunicorn vinder:app
+web: gunicorn --worker-class gevent --workers 1 --timeout 120 vinder:app
+
