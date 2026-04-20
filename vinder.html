@@ -244,15 +244,10 @@
     background: var(--accent);
     border-radius: 2px;
     width: 0%;
-    transition: width 0.3s;
-    animation: indeterminate 1.5s infinite;
+    transition: width 0.1s linear;
   }
-  @keyframes indeterminate {
-    0%   { transform: translateX(-100%); width: 60%; }
-    100% { transform: translateX(200%);  width: 60%; }
-  }
-  .dl-progress-bar.done { animation: none; width: 100%; background: #4ade80; }
-  .dl-progress-bar.fail { animation: none; width: 100%; background: var(--error); }
+  .dl-progress-bar.done { width: 100%; background: #4ade80; }
+  .dl-progress-bar.fail { width: 100%; background: var(--error); }
 
   .dl-close {
     background: none;
@@ -633,30 +628,40 @@
     const wrap = document.getElementById('dl-container');
     const el = document.createElement('div');
     el.className = 'dl-bubble';
+    const barId = 'bar-' + Date.now();
     el.innerHTML = `
       <div class="dl-bubble-icon loading">⬇️</div>
       <div class="dl-bubble-text">
         <div class="dl-bubble-label"></div>
-        <div class="dl-bubble-sub">Mengunduh...</div>
-        <div class="dl-progress"><div class="dl-progress-bar" id="bar-${Date.now()}"></div></div>
+        <div class="dl-bubble-sub">Mengunduh: 0%</div>
+        <div class="dl-progress"><div class="dl-progress-bar" id="${barId}"></div></div>
       </div>
       <button class="dl-close" onclick="closeBubble(this)">✕</button>
     `;
     el.querySelector('.dl-bubble-label').textContent = title;
     wrap.appendChild(el);
-    const bar = el.querySelector('.dl-progress-bar');
+    const bar = el.querySelector('#' + barId);
+    const sub = el.querySelector('.dl-bubble-sub');
+    
     return {
+      updateProgress(p) {
+        bar.style.width = p + '%';
+        sub.textContent = 'Mengunduh: ' + Math.round(p) + '%';
+      },
       setSuccess() {
         el.querySelector('.dl-bubble-icon').textContent = '✅';
         el.querySelector('.dl-bubble-icon').className = 'dl-bubble-icon success';
-        el.querySelector('.dl-bubble-sub').textContent = 'Selesai — cek folder Download';
+        sub.textContent = 'Selesai — Menyimpan...';
         bar.className = 'dl-progress-bar done';
-        setTimeout(() => fadeOutBubble(el), 6000);
+        setTimeout(() => {
+           console.log("[System] Auto Refresh...");
+           location.reload();
+        }, 1500);
       },
       setError(msg) {
         el.querySelector('.dl-bubble-icon').textContent = '❌';
         el.querySelector('.dl-bubble-icon').className = 'dl-bubble-icon error';
-        el.querySelector('.dl-bubble-sub').textContent = msg || 'Gagal';
+        sub.textContent = msg || 'Gagal';
         bar.className = 'dl-progress-bar fail';
       }
     };
@@ -668,9 +673,45 @@
     setTimeout(() => el.remove(), 400);
   }
 
+  async function handleRealDownload(dUrl, title) {
+    const bubble = createBubble(title);
+    try {
+      const response = await fetch(dUrl);
+      if (!response.ok) throw new Error('Gagal mendownload file');
+
+      const reader = response.body.getReader();
+      const contentLength = +response.headers.get('Content-Length');
+      
+      let receivedLength = 0;
+      let chunks = []; 
+      
+      while(true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        receivedLength += value.length;
+        if (contentLength) {
+          bubble.updateProgress((receivedLength / contentLength) * 100);
+        }
+      }
+
+      const blob = new Blob(chunks);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.mp4';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      
+      bubble.setSuccess();
+    } catch (e) {
+      bubble.setError(e.message);
+    }
+  }
+
   function getDownloadUrl(v, resolution) {
     const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
-    // Tambahin timestamp (&t=...) biar jalurnya baru terus (Cache Buster)
     const t = new Date().getTime();
     return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
   }
@@ -683,11 +724,9 @@
     const resultsEl = document.getElementById('results');
     const resolution = resSelected['Search'];
 
-    console.log(`[Search] Keyword: ${kw}, Resolution: ${resolution}`);
     btn.disabled = true;
     btn.textContent = 'Mencari...';
     status.textContent = 'Menghubungi server...';
-    status.className = 'status-txt';
     resultsEl.innerHTML = '';
 
     try {
@@ -701,18 +740,9 @@
           resolution
         })
       });
-      
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({}));
-        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
-      }
-
       const data = await resp.json();
-      console.log('[Search] Response Data:', data);
-
-      if (data.status !== 'success') throw new Error(data.msg || 'Gagal mengambil data dari API');
-      if (!data.data.length) { status.textContent = 'Tidak ditemukan — coba kata kunci lain'; return; }
-
+      if (data.status !== 'success') throw new Error(data.msg);
+      
       status.textContent = `${data.data.length} video ditemukan`;
       status.className = 'status-txt ok';
 
@@ -721,51 +751,37 @@
         const div = document.createElement('div');
         div.className = 'video-item';
         div.innerHTML = `
-          <img src="${v.cover}" class="video-thumb" onerror="this.src='https://placehold.co/85x120/111/444?text=Video'">
+          <img src="${v.cover}" class="video-thumb">
           <div class="video-info">
             <div class="video-title">${v.title}</div>
             <div class="video-meta">
               <span class="meta-tag">⏱ ${v.duration}</span>
               <span class="meta-tag">💾 ${v.size}</span>
-              <span class="meta-tag">👤 ${v.channel}</span>
             </div>
-            <a href="${dUrl}" class="btn-dl" onclick="showBubble('${v.title.replace(/'/g,"").replace(/"/g,"")}')">
+            <button class="btn-dl" onclick="handleRealDownload('${dUrl}', '${v.title.replace(/'/g,"")}')">
               ⬇️ Download
-            </a>
+            </button>
           </div>
         `;
         resultsEl.appendChild(div);
       });
     } catch (e) {
-      console.error('[Search] Error:', e);
       status.textContent = 'Error: ' + e.message;
       status.className = 'status-txt err';
-      const bubble = createBubble('Search Error');
-      bubble.setError(e.message);
     } finally {
       btn.disabled = false;
       btn.textContent = 'Cari Sekarang';
     }
   }
 
-  function showBubble(title) {
-    console.log(`[Download] Bubble triggered for: ${title}`);
-    const bubble = createBubble(title);
-    // Kita kasih delay sukses biar kelihatan prosesnya
-    setTimeout(() => bubble.setSuccess(), 4000);
-  }
-
   async function doDownloadUrl() {
     const url = document.getElementById('dl-url').value.trim();
     if (!url) return;
     const btn = document.getElementById('btn-dlurl');
-    const status = document.getElementById('url-status');
     const resolution = resSelected['Url'];
 
-    console.log(`[DirectURL] Input: ${url}, Res: ${resolution}`);
     btn.disabled = true;
     btn.textContent = 'Memproses...';
-    status.textContent = '';
 
     try {
       const resp = await fetch('/api/download_url', {
@@ -773,32 +789,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, resolution })
       });
-
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({}));
-        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
-      }
-
       const data = await resp.json();
-      console.log('[DirectURL] Response:', data);
-
       if (data.status === 'success') {
-        const t = new Date().getTime();
-        const dUrl = `/api/get_video?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(data.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
-        const a = document.createElement('a');
-        a.href = dUrl;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        showBubble(data.title);
-        setTimeout(() => document.body.removeChild(a), 1000);
+        const dUrl = getDownloadUrl(data, resolution);
+        handleRealDownload(dUrl, data.title);
       } else {
-        throw new Error(data.msg || 'Gagal memproses URL TikTok');
+        throw new Error(data.msg);
       }
     } catch (e) {
-      console.error('[DirectURL] Error:', e);
-      status.textContent = 'Error: ' + e.message;
-      status.className = 'status-txt err';
       const bubble = createBubble('URL Error');
       bubble.setError(e.message);
     } finally {
@@ -812,3 +810,4 @@
   </script>
  </body>
 </html>
+
