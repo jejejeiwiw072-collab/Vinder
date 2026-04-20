@@ -14,6 +14,22 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+@app.after_request
+def add_header(response):
+    """
+    Menambahkan header untuk mencegah browser melakukan caching.
+    Jika parameter 'refresh' ada, instruksikan browser untuk menghapus seluruh data situs (Hard Refresh).
+    """
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '-1'
+    
+    # Fitur Hard Refresh: Hapus cache, cookies, dan storage jika diminta via URL
+    if 'refresh' in request.args:
+        response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
+        
+    return response
+
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Referer": "https://www.tikwm.com/",
