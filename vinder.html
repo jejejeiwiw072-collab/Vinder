@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="id">
  <head>
@@ -532,6 +533,11 @@
     setTimeout(() => el.remove(), 400);
   }
 
+  function getDownloadUrl(v, resolution) {
+    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
+    return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}`;
+  }
+
   async function doSearch() {
     const kw = document.getElementById('kw').value.trim();
     if (!kw) return;
@@ -540,6 +546,7 @@
     const resultsEl = document.getElementById('results');
     const resolution = resSelected['Search'];
 
+    console.log(`[Search] Keyword: ${kw}, Resolution: ${resolution}`);
     btn.disabled = true;
     btn.textContent = 'Mencari...';
     status.textContent = 'Menghubungi server...';
@@ -557,14 +564,23 @@
           resolution
         })
       });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
+      }
+
       const data = await resp.json();
-      if (data.status !== 'success') throw new Error(data.msg);
+      console.log('[Search] Response Data:', data);
+
+      if (data.status !== 'success') throw new Error(data.msg || 'Gagal mengambil data dari API');
       if (!data.data.length) { status.textContent = 'Tidak ada hasil.'; return; }
 
       status.textContent = `${data.data.length} video ditemukan`;
       status.className = 'status-txt ok';
 
       data.data.forEach(v => {
+        const dUrl = getDownloadUrl(v, resolution);
         const div = document.createElement('div');
         div.className = 'video-item';
         div.innerHTML = `
@@ -576,66 +592,43 @@
               <span class="meta-tag">💾 ${v.size}</span>
               <span class="meta-tag">👤 ${v.channel}</span>
             </div>
-            <button class="btn-dl" onclick='downloadVideo(${JSON.stringify(v)}, "${resolution}", this)'>
+            <a href="${dUrl}" class="btn-dl" onclick="showBubble('${v.title.replace(/'/g,"").replace(/"/g,"")}')">
               ⬇️ Download
-            </button>
+            </a>
           </div>
         `;
         resultsEl.appendChild(div);
       });
     } catch (e) {
+      console.error('[Search] Error:', e);
       status.textContent = 'Error: ' + e.message;
       status.className = 'status-txt err';
+      const bubble = createBubble('Search Error');
+      bubble.setError(e.message);
     } finally {
       btn.disabled = false;
       btn.textContent = 'Cari Sekarang';
     }
   }
 
-  function triggerDownloadNative(videoUrl, title, mode) {
-    const bubble = createBubble(title.length > 40 ? title.slice(0, 40) + '…' : title);
-    // Kita lempar ke endpoint GET biar browser yang handle download secara native
-    const downloadUrl = `/api/get_video?url=${encodeURIComponent(videoUrl)}&title=${encodeURIComponent(title)}&mode=${encodeURIComponent(mode)}`;
-    
-    // Pake window.open atau iframe tersembunyi biar gak pindah halaman
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = downloadUrl;
-    document.body.appendChild(iframe);
-    
-    // Anggap sukses karena browser sudah mulai proses download
-    setTimeout(() => {
-      bubble.setSuccess();
-      setTimeout(() => document.body.removeChild(iframe), 2000);
-    }, 2000);
-  }
-
-  function downloadVideo(v, resolution, btn) {
-    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
-    if (!vUrl) { alert('URL Video tidak ditemukan'); return; }
-    
-    btn.disabled = true;
-    btn.textContent = '⏳ Memproses...';
-    
-    try {
-      triggerDownloadNative(vUrl, v.title, resolution);
-    } finally {
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = '⬇️ Download';
-      }, 1000);
-    }
+  function showBubble(title) {
+    console.log(`[Download] Bubble triggered for: ${title}`);
+    const bubble = createBubble(title);
+    // Kita kasih delay sukses biar kelihatan prosesnya
+    setTimeout(() => bubble.setSuccess(), 4000);
   }
 
   async function doDownloadUrl() {
     const url = document.getElementById('dl-url').value.trim();
     if (!url) return;
     const btn = document.getElementById('btn-dlurl');
+    const status = document.getElementById('url-status');
     const resolution = resSelected['Url'];
 
+    console.log(`[DirectURL] Input: ${url}, Res: ${resolution}`);
     btn.disabled = true;
     btn.textContent = 'Memproses...';
-    document.getElementById('url-status').textContent = '';
+    status.textContent = '';
 
     try {
       const resp = await fetch('/api/download_url', {
@@ -643,14 +636,33 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, resolution })
       });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
+      }
+
       const data = await resp.json();
+      console.log('[DirectURL] Response:', data);
+
       if (data.status === 'success') {
-        triggerDownloadNative(data.url, data.title, resolution);
+        const dUrl = `/api/get_video?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(data.title)}&mode=${encodeURIComponent(resolution)}`;
+        const a = document.createElement('a');
+        a.href = dUrl;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        showBubble(data.title);
+        setTimeout(() => document.body.removeChild(a), 1000);
       } else {
-        throw new Error(data.msg);
+        throw new Error(data.msg || 'Gagal memproses URL TikTok');
       }
     } catch (e) {
-      document.getElementById('url-status').textContent = 'Error: ' + e.message;
+      console.error('[DirectURL] Error:', e);
+      status.textContent = 'Error: ' + e.message;
+      status.className = 'status-txt err';
+      const bubble = createBubble('URL Error');
+      bubble.setError(e.message);
     } finally {
       btn.disabled = false;
       btn.textContent = 'Download Langsung';
