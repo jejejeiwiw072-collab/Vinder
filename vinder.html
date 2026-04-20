@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="id">
  <head>
@@ -574,7 +575,7 @@
       console.log('[Search] Response Data:', data);
 
       if (data.status !== 'success') throw new Error(data.msg || 'Gagal mengambil data dari API');
-      if (!data.data.length) { status.textContent = 'Tidak ada hasil.'; return; }
+      if (!data.data.length) { status.textContent = 'Tidak ditemukan — coba kata kunci lain'; return; }
 
       status.textContent = `${data.data.length} video ditemukan`;
       status.className = 'status-txt ok';
@@ -674,4 +675,3 @@
   </script>
  </body>
 </html>
-
