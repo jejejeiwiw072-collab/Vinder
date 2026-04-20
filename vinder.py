@@ -1,7 +1,7 @@
 import os
 import re
 import requests
-from flask import Flask, request, jsonify, send_file, after_this_request
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -20,39 +20,29 @@ def format_durasi(detik):
 def pilih_url_video(data_video, mode='HYPE v1.2'):
     hd_url = data_video.get('hdplay', '').strip()
     sd_url = data_video.get('play', '').strip()
-
     if mode == 'HYPE v1.2':
-        # Prioritas HD Asli (No Limit)
-        url = hd_url if hd_url.startswith('http') else sd_url
-        return url
-    else:
-        # Standard: Paksa pakai link 'play' (Max 720p compressed)
-        url = sd_url if sd_url.startswith('http') else hd_url
-        return url
+        return hd_url if hd_url.startswith('http') else sd_url
+    return sd_url if sd_url.startswith('http') else hd_url
 
-def _do_download(video_obj, mode='HYPE v1.2'):
-    folder = 'downloads/'
-    os.makedirs(folder, exist_ok=True)
-    video_url = pilih_url_video(video_obj, mode)
-
-    if not video_url:
-        raise ValueError("URL video tidak ditemukan")
-
-    safe_title = re.sub(r'[\\/*?:"<>|]', '', video_obj.get('title', 'video'))[:50].strip() or 'video'
-    prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
-    safe_filename = f"{prefix}{safe_title}_{video_obj.get('id', 'id')}.mp4"
-    filepath = os.path.join(folder, safe_filename)
-
-    # Speed Gap: HYPE 1MB Chunk, STD 128KB
-    chunk_size = 1024 * 1024 if mode == 'HYPE v1.2' else 128 * 1024
+def stream_video_proxy(video_url, filename, mode):
+    # Chunk size: HYPE 512KB, STD 128KB (Streaming lebih stabil segini)
+    chunk_size = 512 * 1024 if mode == 'HYPE v1.2' else 128 * 1024
     
     r = requests.get(video_url, stream=True, timeout=120, headers=DOWNLOAD_HEADERS)
     r.raise_for_status()
+    
+    # Ambil header penting dari TikTok
+    headers = {
+        'Content-Type': r.headers.get('Content-Type', 'video/mp4'),
+        'Content-Disposition': f'attachment; filename="{filename}"',
+        'Content-Length': r.headers.get('Content-Length')
+    }
 
-    with open(filepath, 'wb') as f:
+    def generate():
         for chunk in r.iter_content(chunk_size=chunk_size):
-            if chunk: f.write(chunk)
-    return filepath, safe_filename
+            if chunk: yield chunk
+            
+    return Response(stream_with_context(generate()), headers=headers)
 
 @app.route('/')
 def index():
@@ -67,9 +57,10 @@ def search_videos_api():
         videos = resp.json().get('data', {}).get('videos', [])
         results = []
         for v in videos:
-            # === TAMBAHAN: Ambil URL cover (origin_cover prioritas) ===
             cover_url = v.get('origin_cover') or v.get('cover') or ''
-            # =========================================================
+            size_bytes = v.get('size', 0)
+            size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes else "?"
+            
             results.append({
                 'title': v.get('title', 'Video TikTok'),
                 'id': v.get('id', ''),
@@ -78,7 +69,8 @@ def search_videos_api():
                 'channel': v.get('author', {}).get('nickname', 'User'),
                 'play': v.get('play', ''),
                 'hdplay': v.get('hdplay', ''),
-                'cover': cover_url   # <-- tambahan field
+                'cover': cover_url,
+                'size': f"{size_mb} MB"
             })
         return jsonify({"status": "success", "data": results})
     except Exception as e:
@@ -89,31 +81,35 @@ def download_api():
     data = request.json
     mode = data.get('resolution', 'HYPE v1.2')
     try:
-        filepath, safe_filename = _do_download(data, mode)
-        @after_this_request
-        def remove_file(response):
-            if os.path.exists(filepath): os.remove(filepath)
-            return response
-        return send_file(filepath, as_attachment=True, download_name=safe_filename)
+        video_url = pilih_url_video(data, mode)
+        if not video_url: raise ValueError("URL video tidak ditemukan")
+        
+        safe_title = re.sub(r'[\\/*?:"<>|]', '', data.get('title', 'video'))[:50].strip() or 'video'
+        prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
+        safe_filename = f"{prefix}{safe_title}_{data.get('id', 'id')}.mp4"
+        
+        return stream_video_proxy(video_url, safe_filename, mode)
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
 @app.route('/api/download_url', methods=['POST'])
 def download_url_api():
     data = request.json
+    mode = data.get('resolution', 'HYPE v1.2')
     try:
         resp = requests.post("https://www.tikwm.com/api/", data={"url": data.get('url'), "hd": 1})
         d = resp.json().get('data', {})
         v_obj = {'title': d.get('title'), 'id': d.get('id'), 'play': d.get('play'), 'hdplay': d.get('hdplay')}
-        filepath, safe_filename = _do_download(v_obj, data.get('resolution', 'HYPE v1.2'))
-        @after_this_request
-        def remove_file(response):
-            if os.path.exists(filepath): os.remove(filepath)
-            return response
-        return send_file(filepath, as_attachment=True, download_name=safe_filename)
+        
+        video_url = pilih_url_video(v_obj, mode)
+        safe_title = re.sub(r'[\\/*?:"<>|]', '', v_obj.get('title', 'video'))[:50].strip() or 'video'
+        prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
+        safe_filename = f"{prefix}{safe_title}_{v_obj.get('id', 'id')}.mp4"
+        
+        return stream_video_proxy(video_url, safe_filename, mode)
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, threaded=True) # Tambah threaded=True biar bisa multi-download
