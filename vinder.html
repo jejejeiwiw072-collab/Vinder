@@ -532,42 +532,6 @@
     setTimeout(() => el.remove(), 400);
   }
 
-  async function triggerDownload(endpoint, payload, title) {
-    const bubble = createBubble(title.length > 40 ? title.slice(0, 40) + '…' : title);
-    try {
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.msg || `HTTP ${resp.status}`);
-      }
-      const ct = resp.headers.get('Content-Type') || '';
-      if (ct.includes('video') || ct.includes('octet-stream')) {
-        const blob = await resp.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        const cd   = resp.headers.get('Content-Disposition') || '';
-        const fnMatch = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)/i);
-        a.download = fnMatch ? decodeURIComponent(fnMatch[1].trim()) : title.slice(0, 50) + '.mp4';
-        a.href = url;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        bubble.setSuccess();
-      } else {
-        const json = await resp.json();
-        if (json.status === 'error') throw new Error(json.msg);
-        bubble.setSuccess();
-      }
-    } catch (e) {
-      bubble.setError(e.message);
-    }
-  }
-
   async function doSearch() {
     const kw = document.getElementById('kw').value.trim();
     if (!kw) return;
@@ -628,13 +592,39 @@
     }
   }
 
+  function triggerDownloadNative(videoUrl, title, mode) {
+    const bubble = createBubble(title.length > 40 ? title.slice(0, 40) + '…' : title);
+    // Kita lempar ke endpoint GET biar browser yang handle download secara native
+    const downloadUrl = `/api/get_video?url=${encodeURIComponent(videoUrl)}&title=${encodeURIComponent(title)}&mode=${encodeURIComponent(mode)}`;
+    
+    // Pake window.open atau iframe tersembunyi biar gak pindah halaman
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = downloadUrl;
+    document.body.appendChild(iframe);
+    
+    // Anggap sukses karena browser sudah mulai proses download
+    setTimeout(() => {
+      bubble.setSuccess();
+      setTimeout(() => document.body.removeChild(iframe), 2000);
+    }, 2000);
+  }
+
   function downloadVideo(v, resolution, btn) {
+    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
+    if (!vUrl) { alert('URL Video tidak ditemukan'); return; }
+    
     btn.disabled = true;
     btn.textContent = '⏳ Memproses...';
-    triggerDownload('/api/download', { ...v, resolution }, v.title).finally(() => {
-      btn.disabled = false;
-      btn.textContent = '⬇️ Download';
-    });
+    
+    try {
+      triggerDownloadNative(vUrl, v.title, resolution);
+    } finally {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = '⬇️ Download';
+      }, 1000);
+    }
   }
 
   async function doDownloadUrl() {
@@ -647,10 +637,24 @@
     btn.textContent = 'Memproses...';
     document.getElementById('url-status').textContent = '';
 
-    await triggerDownload('/api/download_url', { url, resolution }, url);
-
-    btn.disabled = false;
-    btn.textContent = 'Download Langsung';
+    try {
+      const resp = await fetch('/api/download_url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, resolution })
+      });
+      const data = await resp.json();
+      if (data.status === 'success') {
+        triggerDownloadNative(data.url, data.title, resolution);
+      } else {
+        throw new Error(data.msg);
+      }
+    } catch (e) {
+      document.getElementById('url-status').textContent = 'Error: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Download Langsung';
+    }
   }
 
   document.getElementById('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
