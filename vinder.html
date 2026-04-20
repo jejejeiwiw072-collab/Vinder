@@ -720,5 +720,94 @@
         const div = document.createElement('div');
         div.className = 'video-item';
         div.innerHTML = `
-          <img src="${v.cover}" class="video-thumb" onerror="this.src='https://placehold.co/85x120/111/444?text=Video'">
-          <div class="vid
+             <img src="${v.cover}" class="video-thumb" onerror="this.src='https://placehold.co/85x120/111/444?text=Video'">
+          <div class="video-info">
+            <div class="video-title">${v.title}</div>
+            <div class="video-meta">
+              <span class="meta-tag">⏱ ${v.duration}</span>
+              <span class="meta-tag">💾 ${v.size}</span>
+              <span class="meta-tag">👤 ${v.channel}</span>
+            </div>
+            <a href="${dUrl}" class="btn-dl" onclick="showBubble('${v.title.replace(/'/g,"").replace(/"/g,"")}')">
+              ⬇️ Download
+            </a>
+          </div>
+        `;
+        resultsEl.appendChild(div);
+      });
+    } catch (e) {
+      console.error('[Search] Error:', e);
+      status.textContent = 'Error: ' + e.message;
+      status.className = 'status-txt err';
+      const bubble = createBubble('Search Error');
+      bubble.setError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Cari Sekarang';
+    }
+  }
+
+  function showBubble(title) {
+    console.log(`[Download] Bubble triggered for: ${title}`);
+    const bubble = createBubble(title);
+    // Kita kasih delay sukses biar kelihatan prosesnya
+    setTimeout(() => bubble.setSuccess(), 4000);
+  }
+
+  async function doDownloadUrl() {
+    const url = document.getElementById('dl-url').value.trim();
+    if (!url) return;
+    const btn = document.getElementById('btn-dlurl');
+    const status = document.getElementById('url-status');
+    const resolution = resSelected['Url'];
+
+    console.log(`[DirectURL] Input: ${url}, Res: ${resolution}`);
+    btn.disabled = true;
+    btn.textContent = 'Memproses...';
+    status.textContent = '';
+
+    try {
+      const resp = await fetch('/api/download_url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, resolution })
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.msg || `Server error (HTTP ${resp.status})`);
+      }
+
+      const data = await resp.json();
+      console.log('[DirectURL] Response:', data);
+
+      if (data.status === 'success') {
+        const t = new Date().getTime();
+        const dUrl = `/api/get_video?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(data.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
+        const a = document.createElement('a');
+        a.href = dUrl;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        showBubble(data.title);
+        setTimeout(() => document.body.removeChild(a), 1000);
+      } else {
+        throw new Error(data.msg || 'Gagal memproses URL TikTok');
+      }
+    } catch (e) {
+      console.error('[DirectURL] Error:', e);
+      status.textContent = 'Error: ' + e.message;
+      status.className = 'status-txt err';
+      const bubble = createBubble('URL Error');
+      bubble.setError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Download Langsung';
+    }
+  }
+
+  document.getElementById('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  document.getElementById('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') doDownloadUrl(); });
+  </script>
+ </body>
+</html>
