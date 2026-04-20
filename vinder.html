@@ -535,7 +535,9 @@
 
   function getDownloadUrl(v, resolution) {
     const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
-    return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}`;
+    // Tambahin timestamp (&t=...) biar jalurnya baru terus (Cache Buster)
+    const t = new Date().getTime();
+    return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
   }
 
   async function doSearch() {
@@ -646,7 +648,8 @@
       console.log('[DirectURL] Response:', data);
 
       if (data.status === 'success') {
-        const dUrl = `/api/get_video?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(data.title)}&mode=${encodeURIComponent(resolution)}`;
+        const t = new Date().getTime();
+        const dUrl = `/api/get_video?url=${encodeURIComponent(data.url)}&title=${encodeURIComponent(data.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
         const a = document.createElement('a');
         a.href = dUrl;
         a.style.display = 'none';
