@@ -421,9 +421,10 @@
   </style>
  </head>
  <body>
-  <h2 style="position: absolute; right: 20px;">
-   zakdev_&gt;
-  </h2>
+  <div style="position: absolute; right: 20px; top: 20px; display: flex; align-items: center; gap: 10px;">
+   <button onclick="triggerHardRefresh()" style="background: #111; border: 1px solid #333; color: #666; font-size: 10px; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: 'Space Mono', monospace; letter-spacing: 1px; transition: all 0.2s; font-weight: bold;" onmouseover="this.style.borderColor='var(--accent)'; this.style.color='#fff'" onmouseout="this.style.borderColor='#333'; this.style.color='#666'">HARD REFRESH</button>
+   <h2 style="margin: 0; font-family: 'Space Mono', monospace; font-size: 18px;">zakdev_&gt;</h2>
+  </div>
   <h1>
    🎬 Vid
    <span>
@@ -536,7 +537,18 @@
   <div id="dl-container">
   </div>
   <script>
-   const resSelected = { Search: 'HYPE v1.2', Url: 'HYPE v1.2' };
+  // Fungsi Hard Refresh: Hapus storage lokal & memicu Clear-Site-Data dari server
+  function triggerHardRefresh() {
+    console.log("[System] Initiating 100% Hard Refresh...");
+    localStorage.clear();
+    sessionStorage.clear();
+    // Gunakan URL dengan timestamp untuk memicu pembersihan cache di backend vinder.py
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set('refresh', Date.now());
+    window.location.replace(url.toString());
+  }
+
+  const resSelected = { Search: 'HYPE v1.2', Url: 'HYPE v1.2' };
 
   document.addEventListener('click', function(e) {
     ['popupSearch','popupUrl'].forEach(id => {
@@ -654,8 +666,7 @@
         sub.textContent = 'Selesai — Menyimpan...';
         bar.className = 'dl-progress-bar done';
         setTimeout(() => {
-           console.log("[System] Auto Refresh...");
-           location.reload();
+           triggerHardRefresh();
         }, 1500);
       },
       setError(msg) {
@@ -710,8 +721,7 @@
     }
   }
 
-  function getDownloadUrl(v, resolution) {
-    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
+  function getDownloadUrl(v, resolution) { const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
     const t = new Date().getTime();
     return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
   }
@@ -810,4 +820,3 @@
   </script>
  </body>
 </html>
-
