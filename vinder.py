@@ -85,10 +85,11 @@ def get_video_api():
         r = requests.get(video_url, stream=True, timeout=60, headers=DOWNLOAD_HEADERS)
         r.raise_for_status()
 
-        safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:30].strip() or 'video'
+        # Sanitasi judul: hanya izinkan alfanumerik, spasi, dan tanda hubung/garis bawah
+        safe_title = re.sub(r'[^a-zA-Z0-9\s_-]', '', title).strip()[:30] or 'video'
         timestamp = int(time.time() * 1000)
         prefix = "HYPE" if "HYPE" in mode else "STD"
-        safe_filename = f"[{prefix}]_{safe_title}_{timestamp}.mp4"
+        safe_filename = f"{prefix}_{safe_title}_{timestamp}.mp4"
 
         def generate():
             try:
