@@ -24,9 +24,10 @@ def add_header(response):
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '-1'
     
-    # Fitur Hard Refresh: Hapus cache, cookies, dan storage jika diminta via URL
+    # Fitur Hard Refresh Otomatis: Hapus cache, cookies, storage, dan executionContexts
     if 'refresh' in request.args:
-        response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
+        response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage", "executionContexts"'
+        response.headers['Connection'] = 'close' # Putuskan koneksi biar bener-bener fresh
         
     return response
 
