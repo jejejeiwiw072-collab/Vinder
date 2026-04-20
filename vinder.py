@@ -1,7 +1,8 @@
 import os
 import re
+import time
 import requests
-from flask import Flask, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -24,25 +25,32 @@ def pilih_url_video(data_video, mode='HYPE v1.2'):
         return hd_url if hd_url.startswith('http') else sd_url
     return sd_url if sd_url.startswith('http') else hd_url
 
-def stream_video_proxy(video_url, filename, mode):
-    # Chunk size: HYPE 512KB, STD 128KB (Streaming lebih stabil segini)
-    chunk_size = 512 * 1024 if mode == 'HYPE v1.2' else 128 * 1024
+def _do_download(video_obj, mode='HYPE v1.2'):
+    folder = 'downloads/'
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+        
+    video_url = pilih_url_video(video_obj, mode)
+    if not video_url:
+        raise ValueError("URL video tidak ditemukan")
+
+    # Nama file unik pake timestamp biar gak bentrok pas download barengan
+    safe_title = re.sub(r'[\\/*?:"<>|]', '', video_obj.get('title', 'video'))[:30].strip() or 'video'
+    timestamp = int(time.time())
+    prefix = "HYPE" if mode == 'HYPE v1.2' else "STD"
+    safe_filename = f"[{prefix}]_{safe_title}_{timestamp}.mp4"
+    filepath = os.path.join(folder, safe_filename)
+
+    chunk_size = 1024 * 1024 # 1MB biar kenceng
     
     r = requests.get(video_url, stream=True, timeout=120, headers=DOWNLOAD_HEADERS)
     r.raise_for_status()
-    
-    # Ambil header penting dari TikTok
-    headers = {
-        'Content-Type': r.headers.get('Content-Type', 'video/mp4'),
-        'Content-Disposition': f'attachment; filename="{filename}"',
-        'Content-Length': r.headers.get('Content-Length')
-    }
 
-    def generate():
+    with open(filepath, 'wb') as f:
         for chunk in r.iter_content(chunk_size=chunk_size):
-            if chunk: yield chunk
+            if chunk: f.write(chunk)
             
-    return Response(stream_with_context(generate()), headers=headers)
+    return filepath, safe_filename
 
 @app.route('/')
 def index():
@@ -81,14 +89,19 @@ def download_api():
     data = request.json
     mode = data.get('resolution', 'HYPE v1.2')
     try:
-        video_url = pilih_url_video(data, mode)
-        if not video_url: raise ValueError("URL video tidak ditemukan")
+        filepath, safe_filename = _do_download(data, mode)
         
-        safe_title = re.sub(r'[\\/*?:"<>|]', '', data.get('title', 'video'))[:50].strip() or 'video'
-        prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
-        safe_filename = f"{prefix}{safe_title}_{data.get('id', 'id')}.mp4"
-        
-        return stream_video_proxy(video_url, safe_filename, mode)
+        @after_this_request
+        def remove_file(response):
+            # Kita kasih delay dikit atau pastiin file ada sebelum hapus
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except:
+                pass
+            return response
+            
+        return send_file(filepath, as_attachment=True, download_name=safe_filename)
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
@@ -101,15 +114,22 @@ def download_url_api():
         d = resp.json().get('data', {})
         v_obj = {'title': d.get('title'), 'id': d.get('id'), 'play': d.get('play'), 'hdplay': d.get('hdplay')}
         
-        video_url = pilih_url_video(v_obj, mode)
-        safe_title = re.sub(r'[\\/*?:"<>|]', '', v_obj.get('title', 'video'))[:50].strip() or 'video'
-        prefix = "[HYPE]_" if mode == 'HYPE v1.2' else "[STD]_"
-        safe_filename = f"{prefix}{safe_title}_{v_obj.get('id', 'id')}.mp4"
+        filepath, safe_filename = _do_download(v_obj, mode)
         
-        return stream_video_proxy(video_url, safe_filename, mode)
+        @after_this_request
+        def remove_file(response):
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except:
+                pass
+            return response
+            
+        return send_file(filepath, as_attachment=True, download_name=safe_filename)
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, threaded=True) # Tambah threaded=True biar bisa multi-download
+    # Gunakan threaded=True supaya bisa handle banyak download sekaligus
+    app.run(host='0.0.0.0', port=port, threaded=True)
