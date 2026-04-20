@@ -1,1 +1,2 @@
-web: gunicorn vinder: app
+web: gunicorn vinder:app
+
