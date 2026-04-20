@@ -109,15 +109,18 @@ def get_video_api():
             "Content-Type": "video/mp4",
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
-            "Expires": "0"
+            "Expires": "0",
+            "Access-Control-Expose-Headers": "Content-Length"
         }
         if content_length:
             headers["Content-Length"] = content_length
 
-        return Response(
+        # Kirim response streaming
+        resp = Response(
             stream_with_context(generate()),
             headers=headers
         )
+        return resp
     except Exception as e:
         err_msg = f"Download Error: {str(e)}"
         logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
