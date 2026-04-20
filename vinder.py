@@ -2,13 +2,18 @@ import os
 import re
 import time
 import requests
-from flask import Flask, request, jsonify, send_file, after_this_request
+import logging
+import traceback
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from flask_cors import CORS
+
+# Setup Mata-mata (Logging)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# Folder buat simpan sementara
 DOWNLOAD_FOLDER = 'downloads/'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
@@ -23,13 +28,6 @@ def format_durasi(detik):
     m, s = divmod(int(detik), 60)
     return f"{m}m{s:02d}s"
 
-def pilih_url_video(data_video, mode='HYPE v1.2'):
-    hd_url = data_video.get('hdplay', '').strip()
-    sd_url = data_video.get('play', '').strip()
-    if mode == 'HYPE v1.2':
-        return hd_url if hd_url.startswith('http') else sd_url
-    return sd_url if sd_url.startswith('http') else hd_url
-
 @app.route('/')
 def index():
     return send_file('vinder.html')
@@ -37,10 +35,21 @@ def index():
 @app.route('/api/search', methods=['POST'])
 def search_videos_api():
     data = request.json
+    keyword = data.get('keyword')
+    logger.info(f"🔍 Searching for: {keyword}")
     try:
         resp = requests.post("https://www.tikwm.com/api/feed/search", 
-                             data={"keywords": data.get('keyword'), "count": data.get('limit', 10), "HD": 1})
-        videos = resp.json().get('data', {}).get('videos', [])
+                             data={"keywords": keyword, "count": data.get('limit', 10), "HD": 1},
+                             timeout=30)
+        resp.raise_for_status()
+        json_data = resp.json()
+        
+        if json_data.get('code') != 0:
+            msg = json_data.get('msg', 'API TikWM return non-zero code')
+            logger.error(f"❌ TikWM API Error: {msg}")
+            return jsonify({"status": "error", "msg": f"TikWM API: {msg}"})
+
+        videos = json_data.get('data', {}).get('videos', [])
         results = []
         for v in videos:
             cover_url = v.get('origin_cover') or v.get('cover') or ''
@@ -57,11 +66,13 @@ def search_videos_api():
                 'cover': cover_url,
                 'size': f"{size_mb} MB"
             })
+        logger.info(f"✅ Found {len(results)} videos")
         return jsonify({"status": "success", "data": results})
     except Exception as e:
-        return jsonify({"status": "error", "msg": str(e)})
+        err_msg = f"Search Error: {str(e)}"
+        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "msg": err_msg})
 
-# ENDPOINT BARU: Download via GET (Lebih stabil buat browser)
 @app.route('/api/get_video')
 def get_video_api():
     video_url = request.args.get('url')
@@ -69,16 +80,19 @@ def get_video_api():
     mode = request.args.get('mode', 'HYPE v1.2')
     
     if not video_url:
+        logger.warning("⚠️ Download failed: No URL provided")
         return "URL tidak ditemukan", 400
 
+    logger.info(f"📥 Starting download: {title} ({mode})")
     try:
         safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:30].strip() or 'video'
-        timestamp = int(time.time())
-        prefix = "HYPE" if mode == 'HYPE v1.2' else "STD"
+        timestamp = int(time.time() * 1000)
+        prefix = "HYPE" if "HYPE" in mode else "STD"
         safe_filename = f"[{prefix}]_{safe_title}_{timestamp}.mp4"
         filepath = os.path.join(DOWNLOAD_FOLDER, safe_filename)
 
-        # Download dari TikTok ke server kita dulu
+        # Download dari TikTok ke Server
+        logger.info(f"🔗 Fetching from TikTok: {video_url[:50]}...")
         r = requests.get(video_url, stream=True, timeout=120, headers=DOWNLOAD_HEADERS)
         r.raise_for_status()
 
@@ -86,35 +100,64 @@ def get_video_api():
             for chunk in r.iter_content(chunk_size=1024*1024):
                 if chunk: f.write(chunk)
         
-        @after_this_request
-        def cleanup(response):
-            try:
-                if os.path.exists(filepath): os.remove(filepath)
-            except: pass
-            return response
+        logger.info(f"💾 File saved locally: {filepath} ({os.path.getsize(filepath)} bytes)")
 
-        return send_file(filepath, as_attachment=True, download_name=safe_filename)
+        def generate():
+            try:
+                with open(filepath, 'rb') as f:
+                    yield from f
+                logger.info(f"📤 Stream to client finished: {safe_filename}")
+            finally:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    logger.info(f"🗑️ Temporary file deleted: {filepath}")
+
+        return Response(
+            stream_with_context(generate()),
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_filename}"',
+                "Content-Type": "video/mp4",
+                "Content-Length": os.path.getsize(filepath)
+            }
+        )
     except Exception as e:
-        return str(e), 500
+        err_msg = f"Download Error: {str(e)}"
+        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
+        return err_msg, 500
 
 @app.route('/api/download_url', methods=['POST'])
 def download_url_api():
     data = request.json
     url_input = data.get('url')
-    mode = data.get('resolution', 'HYPE v1.2')
+    logger.info(f"🔗 Processing URL download: {url_input}")
     try:
-        resp = requests.post("https://www.tikwm.com/api/", data={"url": url_input, "hd": 1})
-        d = resp.json().get('data', {})
-        v_url = pilih_url_video(d, mode)
-        # Kirim balik URL aslinya biar frontend yang handle download-nya
+        resp = requests.post("https://www.tikwm.com/api/", data={"url": url_input, "hd": 1}, timeout=30)
+        resp.raise_for_status()
+        json_data = resp.json()
+        
+        if json_data.get('code') != 0:
+            msg = json_data.get('msg', 'API TikWM return non-zero code')
+            logger.error(f"❌ TikWM URL Error: {msg}")
+            return jsonify({"status": "error", "msg": f"TikWM: {msg}"})
+
+        d = json_data.get('data', {})
+        target_url = d.get('hdplay') or d.get('play')
+        
+        if not target_url:
+            logger.error("❌ No play URL found in TikWM response")
+            return jsonify({"status": "error", "msg": "Video URL tidak ditemukan dalam respon API"})
+
+        logger.info(f"✅ URL Resolved: {target_url[:50]}...")
         return jsonify({
-            "status": "success", 
-            "url": v_url, 
+            "status": "success",
+            "url": target_url,
             "title": d.get('title', 'video')
         })
     except Exception as e:
-        return jsonify({"status": "error", "msg": str(e)}), 500
+        err_msg = f"URL Resolve Error: {str(e)}"
+        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "msg": err_msg})
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    logger.info("🚀 VidFinder System Backend Started on port 5000")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), threaded=True)
