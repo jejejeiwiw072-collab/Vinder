@@ -32,14 +32,22 @@ def add_header(response):
     return response
 
 DOWNLOAD_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Referer": "https://www.tikwm.com/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Range": "bytes=0-",
+    "Referer": "https://www.tiktok.com/",
+    "Origin": "https://www.tiktok.com/",
 }
 
 def format_durasi(detik):
     if detik is None: return "?"
-    m, s = divmod(int(detik), 60)
-    return f"{m}m{s:02d}s"
+    try:
+        detik = int(detik)
+        m, s = divmod(detik, 60)
+        return f"{m}m{s:02d}s"
+    except:
+        return "?"
 
 @app.route('/')
 def index():
@@ -49,10 +57,11 @@ def index():
 def search_videos_api():
     data = request.json
     keyword = data.get('keyword')
-    logger.info(f"🔍 Searching for: {keyword}")
+    limit = data.get('limit', 10)
+    logger.info(f"🔍 Searching for: {keyword} (limit: {limit})")
     try:
         resp = requests.post("https://www.tikwm.com/api/feed/search", 
-                             data={"keywords": keyword, "count": data.get('limit', 10), "HD": 1},
+                             data={"keywords": keyword, "count": limit, "HD": 1},
                              timeout=30)
         resp.raise_for_status()
         json_data = resp.json()
@@ -69,13 +78,17 @@ def search_videos_api():
             size_bytes = v.get('size', 0)
             size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes else "?"
             
+            # Pastikan ada minimal satu URL play
+            play_url = v.get('play', '')
+            hd_url = v.get('hdplay', '')
+            
             results.append({
                 'title': v.get('title', 'Video TikTok'),
                 'id': v.get('id', ''),
                 'duration': format_durasi(v.get('duration')),
                 'channel': v.get('author', {}).get('nickname', 'User'),
-                'play': v.get('play', ''),
-                'hdplay': v.get('hdplay', ''),
+                'play': play_url,
+                'hdplay': hd_url or play_url, # Fallback ke normal jika HD kosong
                 'cover': cover_url,
                 'size': f"{size_mb} MB"
             })
@@ -92,52 +105,50 @@ def get_video_api():
     title = request.args.get('title', 'video')
     mode = request.args.get('mode', 'HYPE v1.2')
     
-    if not video_url:
-        logger.warning("⚠️ Download failed: No URL provided")
-        return "URL tidak ditemukan", 400
+    if not video_url or not video_url.startswith('http'):
+        logger.warning(f"⚠️ Invalid URL: {video_url}")
+        return "URL tidak valid", 400
 
-    logger.info(f"📥 Streaming download: {title} ({mode})")
+    logger.info(f"📥 Streaming download: {title[:30]}... ({mode})")
     try:
-        # Langsung streaming dari TikTok ke User (Streaming Proxy)
+        # Request ke source dengan header yang lebih kuat
         r = requests.get(video_url, stream=True, timeout=60, headers=DOWNLOAD_HEADERS)
         r.raise_for_status()
 
-        # Sanitasi judul: hanya izinkan alfanumerik, spasi, dan tanda hubung/garis bawah
-        safe_title = re.sub(r'[^a-zA-Z0-9\s_-]', '', title).strip()[:30] or 'video'
-        timestamp = int(time.time() * 1000)
+        # Validasi apakah ini benar-benar video (bisa jadi audio/mpeg jika salah link)
+        content_type = r.headers.get('Content-Type', '')
+        if 'video' not in content_type and 'octet-stream' not in content_type:
+            logger.warning(f"⚠️ Source returned unexpected content type: {content_type}")
+            # Kita tetap paksa mp4 jika ukurannya besar, tapi beri peringatan di log
+
+        # Sanitasi judul untuk filename
+        safe_title = re.sub(r'[^a-zA-Z0-9\s_-]', '', title).strip()[:50] or 'video'
+        timestamp = int(time.time())
         prefix = "HYPE" if "HYPE" in mode else "STD"
         safe_filename = f"{prefix}_{safe_title}_{timestamp}.mp4"
 
         def generate():
             try:
-                # Ambil data dari TikTok per chunk dan langsung kirim ke client
-                for chunk in r.iter_content(chunk_size=1024*1024):
+                # Chunk size lebih kecil (256KB) untuk stabilitas streaming pada koneksi lambat
+                for chunk in r.iter_content(chunk_size=256*1024):
                     if chunk:
                         yield chunk
-                logger.info(f"📤 Stream to client finished: {safe_filename}")
             except Exception as e:
-                logger.error(f"💥 Streaming interrupted: {str(e)}")
+                logger.error(f"💥 Streaming interrupted for {safe_filename}: {str(e)}")
 
-        # Ambil content length dari tiktok asal jika ada biar browser tau progress download-nya
         content_length = r.headers.get('Content-Length')
         
         headers = {
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
             "Content-Type": "video/mp4",
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
+            "X-Content-Type-Options": "nosniff", # Paksa browser ikuti Content-Type kita
             "Access-Control-Expose-Headers": "Content-Length"
         }
         if content_length:
             headers["Content-Length"] = content_length
 
-        # Kirim response streaming
-        resp = Response(
-            stream_with_context(generate()),
-            headers=headers
-        )
-        return resp
+        return Response(stream_with_context(generate()), headers=headers)
     except Exception as e:
         err_msg = f"Download Error: {str(e)}"
         logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
