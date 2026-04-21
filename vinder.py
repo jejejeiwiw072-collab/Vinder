@@ -78,6 +78,44 @@ def search_videos_api():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)})
 
+def extract_video_id(play_url):
+    """Ekstrak video ID dari URL CDN TikTok atau URL tiktok.com biasa."""
+    # Format: /video/tos/.../VIDEOID/?...
+    match = re.search(r'/([a-f0-9]{32})/', play_url)
+    if match:
+        return match.group(1)
+    # Format URL tiktok.com/video/123456789
+    match = re.search(r'tiktok\.com/.+/video/(\d+)', play_url)
+    if match:
+        return match.group(1)
+    return None
+
+def fetch_fresh_url(old_url, hd=True):
+    """Coba dapatkan URL CDN segar dari tikwm menggunakan URL asli video."""
+    try:
+        resp = session.post("https://www.tikwm.com/api/", 
+                           data={"url": old_url, "hd": 1 if hd else 0}, 
+                           timeout=15)
+        resp.raise_for_status()
+        d = resp.json().get('data', {})
+        fresh = d.get('hdplay') if hd else None
+        return fresh or d.get('play') or old_url
+    except Exception as e:
+        logger.warning(f"⚠️ Gagal refresh URL: {e}")
+        return old_url
+
+@app.route('/api/refresh_url', methods=['POST'])
+def refresh_url_api():
+    """Endpoint untuk mendapatkan URL CDN segar sebelum download."""
+    data = request.json
+    original_url = data.get('url')
+    hd = data.get('hd', True)
+    if not original_url:
+        return jsonify({"status": "error", "msg": "URL kosong"}), 400
+    fresh_url = fetch_fresh_url(original_url, hd)
+    logger.info(f"🔄 Refreshed URL: {fresh_url[:60]}...")
+    return jsonify({"status": "success", "url": fresh_url})
+
 @app.route('/api/get_video')
 def get_video_api():
     video_url = request.args.get('url')
@@ -90,10 +128,16 @@ def get_video_api():
         # Coba request pertama
         r = session.get(video_url, stream=True, timeout=60, allow_redirects=True)
         
-        # Fallback jika 403/404 (Sering terjadi jika CDN token kadaluarsa)
+        # Jika 403/404 → CDN token expired → fetch URL segar dari tikwm
         if r.status_code in [403, 404]:
-            logger.warning(f"⚠️ {r.status_code} detected, retrying with fresh session...")
-            r = requests.get(video_url, stream=True, timeout=60, allow_redirects=True, headers=DOWNLOAD_HEADERS)
+            logger.warning(f"⚠️ {r.status_code} detected, fetching fresh CDN URL from tikwm...")
+            fresh_url = fetch_fresh_url(video_url, hd=True)
+            if fresh_url != video_url:
+                logger.info(f"🔄 Retrying with fresh URL...")
+                r = session.get(fresh_url, stream=True, timeout=60, allow_redirects=True)
+            else:
+                # Tetap coba dengan fresh session sebagai last resort
+                r = requests.get(video_url, stream=True, timeout=60, allow_redirects=True, headers=DOWNLOAD_HEADERS)
             
         r.raise_for_status()
 
@@ -119,7 +163,7 @@ def get_video_api():
 
         return Response(stream_with_context(generate()), headers=headers)
     except Exception as e:
-        logger.error(f"💥 Proxy Error: {str(e)}")
+        logger.error(f"💥 Download Error: {str(e)}")
         return f"Gagal mengambil video: {str(e)}", 500
 
 @app.route('/api/download_url', methods=['POST'])
