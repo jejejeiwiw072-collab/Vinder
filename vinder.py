@@ -3,7 +3,7 @@ import re
 import time
 import requests
 import logging
-import traceback
+import yt_dlp
 from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from flask_cors import CORS
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Global Session untuk performa dan konsistensi
+# Global Session untuk streaming CDN
 session = requests.Session()
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
@@ -43,56 +43,96 @@ def format_durasi(detik):
         return f"{m}m{s:02d}s"
     except: return "?"
 
-def is_video_url(url):
-    """Cek apakah URL ini adalah video (bukan audio/musik)."""
-    if not url:
-        return False
-    # URL audio: berakhiran .mp3 atau ada /music/ atau /audio/ di path-nya
-    if url.endswith('.mp3') or '/music/' in url or '/audio/' in url:
-        return False
-    # URL CDN TikTok yang valid punya mime_type=video_mp4
-    if 'mime_type=video_mp4' in url:
-        return True
-    # URL proxy tikwm untuk video
-    if '/video/media/play/' in url:
-        return True
-    # Default: anggap valid, biarkan CDN yang reject kalau memang bukan video
-    return True
+# =============================================
+# MESIN BARU: yt-dlp (gantikan tikwm untuk download)
+# =============================================
 
-def get_best_video_url(data):
-    """Ambil URL video terbaik dari response tikwm, pastikan bukan audio."""
-    for url in [data.get('hdplay'), data.get('play')]:
-        if url and is_video_url(url):
-            return url
-    return None
+YDL_OPTS_BASE = {
+    'quiet': True,
+    'no_warnings': True,
+    'extract_flat': False,
+    'skip_download': True,         # Hanya ambil info, tidak download ke disk
+    'noplaylist': True,
+}
 
-def fetch_fresh_url(old_url, hd=True):
-    """Fetch URL CDN segar dari tikwm karena token CDN TikTok cepat expire."""
-    try:
-        resp = session.post("https://www.tikwm.com/api/",
-                            data={"url": old_url, "hd": 1 if hd else 0},
-                            timeout=15)
-        resp.raise_for_status()
-        d = resp.json().get('data', {})
-        return get_best_video_url(d) or old_url
-    except Exception as e:
-        logger.warning(f"⚠️ Gagal refresh URL: {e}")
-        return old_url
+def extract_info_ytdlp(url):
+    """
+    Ekstrak info video TikTok pakai yt-dlp.
+    Return dict: { url_video, title, thumbnail, duration, filesize, author }
+    Raise Exception kalau gagal.
+    """
+    with yt_dlp.YoutubeDL(YDL_OPTS_BASE) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-def diagnose_tikwm_error(data):
-    """Kasih pesan error yang informatif berdasarkan kondisi response tikwm."""
-    if not data:
-        return "Video tidak dapat diakses (mungkin private atau sudah dihapus)"
-    play = data.get('play', '')
-    hdplay = data.get('hdplay', '')
-    music = data.get('music', '')
-    if not play and not hdplay:
-        if music:
-            return "Kreator menonaktifkan download video ini (hanya audio tersedia)"
-        return "Video tidak bisa diunduh — kreator menonaktifkan download atau video bersifat private/geo-lock"
-    if all(not is_video_url(u) for u in [play, hdplay] if u):
-        return "Kreator menonaktifkan download video ini (hanya audio tersedia)"
-    return "Video URL tidak ditemukan"
+    if not info:
+        raise Exception("yt-dlp tidak bisa mengambil info video")
+
+    # Pilih format terbaik: video+audio, no watermark, mp4 lebih diutamakan
+    formats = info.get('formats', [])
+    
+    best_url = None
+    best_filesize = 0
+
+    # Prioritas 1: format mp4 dengan video dan audio sekaligus (no watermark)
+    for f in formats:
+        vcodec = f.get('vcodec', 'none')
+        acodec = f.get('acodec', 'none')
+        ext = f.get('ext', '')
+        url_f = f.get('url', '')
+        fsize = f.get('filesize') or f.get('filesize_approx') or 0
+        
+        if vcodec != 'none' and acodec != 'none' and ext == 'mp4' and url_f:
+            if fsize > best_filesize:
+                best_url = url_f
+                best_filesize = fsize
+
+    # Prioritas 2: format apapun yang punya video+audio
+    if not best_url:
+        for f in formats:
+            vcodec = f.get('vcodec', 'none')
+            acodec = f.get('acodec', 'none')
+            url_f = f.get('url', '')
+            fsize = f.get('filesize') or f.get('filesize_approx') or 0
+            if vcodec != 'none' and acodec != 'none' and url_f:
+                if fsize > best_filesize:
+                    best_url = url_f
+                    best_filesize = fsize
+
+    # Prioritas 3: format dengan video saja (fallback terakhir)
+    if not best_url:
+        for f in formats:
+            vcodec = f.get('vcodec', 'none')
+            url_f = f.get('url', '')
+            if vcodec != 'none' and url_f:
+                best_url = url_f
+                break
+
+    if not best_url:
+        raise Exception("Tidak ada format video yang bisa diunduh (mungkin kreator menonaktifkan download atau video private)")
+
+    # Ambil info author
+    uploader = info.get('uploader') or info.get('creator') or info.get('channel') or 'User'
+
+    # Thumbnail terbaik
+    thumbnails = info.get('thumbnails', [])
+    thumbnail = ''
+    if thumbnails:
+        thumbnail = thumbnails[-1].get('url', '') or info.get('thumbnail', '')
+    if not thumbnail:
+        thumbnail = info.get('thumbnail', '')
+
+    return {
+        'url_video': best_url,
+        'title': info.get('title', 'Video TikTok'),
+        'author': uploader,
+        'thumbnail': thumbnail,
+        'duration': info.get('duration'),
+        'filesize': best_filesize,
+    }
+
+# =============================================
+# ENDPOINTS
+# =============================================
 
 @app.route('/')
 def index():
@@ -100,28 +140,33 @@ def index():
 
 @app.route('/api/search', methods=['POST'])
 def search_videos_api():
+    # Search tetap pakai tikwm — yt-dlp tidak support keyword search
     data = request.json
     keyword = data.get('keyword')
     limit = data.get('limit', 10)
     logger.info(f"🔍 Searching: {keyword}")
     try:
-        resp = session.post("https://www.tikwm.com/api/feed/search", 
+        resp = session.post("https://www.tikwm.com/api/feed/search",
                            data={"keywords": keyword, "count": limit, "HD": 1},
                            timeout=30)
         resp.raise_for_status()
         json_data = resp.json()
-        
+
         if json_data.get('code') != 0:
             return jsonify({"status": "error", "msg": f"TikWM: {json_data.get('msg')}"})
 
         videos = json_data.get('data', {}).get('videos', [])
         results = []
         for v in videos:
+            # Simpan video_id agar bisa di-resolve ulang via yt-dlp saat download
+            vid_id = v.get('video_id') or v.get('id') or ''
             results.append({
                 'title': v.get('title', 'Video TikTok'),
                 'duration': format_durasi(v.get('duration')),
                 'play': v.get('play', ''),
                 'hdplay': v.get('hdplay', '') or v.get('play', ''),
+                'video_id': vid_id,
+                'tiktok_url': f"https://www.tiktok.com/video/{vid_id}" if vid_id else '',
                 'cover': v.get('origin_cover') or v.get('cover') or '',
                 'size': f"{round(v.get('size', 0)/(1024*1024), 2)} MB" if v.get('size') else "?"
             })
@@ -131,27 +176,29 @@ def search_videos_api():
 
 @app.route('/api/get_video')
 def get_video_api():
-    video_url = request.args.get('url')
+    video_url = request.args.get('url')       # bisa CDN URL atau tiktok.com URL
+    tiktok_url = request.args.get('tiktok_url', '')  # URL tiktok.com asli untuk fallback yt-dlp
     title = request.args.get('title', 'video')
-    
+
     if not video_url: return "URL Kosong", 400
 
-    # Tolak langsung kalau URL yang masuk adalah audio
-    if not is_video_url(video_url):
-        logger.warning(f"🚫 URL bukan video: {video_url[:60]}")
-        return jsonify({"error": "Kreator menonaktifkan download video ini (hanya audio tersedia)"}), 400
-
     logger.info(f"📥 Proxying video: {video_url[:60]}...")
+    r = None
     try:
+        # Coba stream CDN URL langsung dulu (cepat)
         r = session.get(video_url, stream=True, timeout=60, allow_redirects=True)
-        
-        # Jika 403/404 → token CDN expired → fetch URL segar dari tikwm lalu retry
+
+        # Kalau CDN expired (403/404) → pakai yt-dlp untuk dapat URL fresh
         if r.status_code in [403, 404]:
-            logger.warning(f"⚠️ {r.status_code} detected, fetching fresh CDN URL from tikwm...")
-            fresh_url = fetch_fresh_url(video_url, hd=True)
-            if fresh_url != video_url:
-                logger.info(f"🔄 Retrying with fresh URL...")
-                r = session.get(fresh_url, stream=True, timeout=60, allow_redirects=True)
+            logger.warning(f"⚠️ {r.status_code} — CDN expired, switching to yt-dlp...")
+            
+            # Gunakan tiktok_url kalau ada, fallback ke video_url
+            resolve_url = tiktok_url if tiktok_url else video_url
+            info = extract_info_ytdlp(resolve_url)
+            fresh_url = info['url_video']
+            
+            logger.info(f"🔄 yt-dlp fresh URL didapat, retrying stream...")
+            r = session.get(fresh_url, stream=True, timeout=60, allow_redirects=True)
 
         r.raise_for_status()
 
@@ -169,11 +216,12 @@ def get_video_api():
             "X-Content-Type-Options": "nosniff",
             "Access-Control-Expose-Headers": "Content-Length"
         }
-        
+
         cl = r.headers.get('Content-Length')
         if cl: headers["Content-Length"] = cl
 
         return Response(stream_with_context(generate()), headers=headers)
+
     except Exception as e:
         logger.error(f"💥 Download Error: {str(e)}")
         return f"Gagal mengambil video: {str(e)}", 500
@@ -182,34 +230,28 @@ def get_video_api():
 def download_url_api():
     data = request.json
     url_input = data.get('url')
-    logger.info(f"🔗 Processing URL: {url_input}")
+    logger.info(f"🔗 Processing URL via yt-dlp: {url_input}")
     try:
-        resp = session.post("https://www.tikwm.com/api/", data={"url": url_input, "hd": 1}, timeout=30)
-        resp.raise_for_status()
-        json_data = resp.json()
-        
-        if json_data.get('code') != 0:
-            return jsonify({"status": "error", "msg": f"TikWM: {json_data.get('msg')}"})
+        # yt-dlp langsung resolve TikTok URL — dapat URL CDN fresh tiap saat
+        info = extract_info_ytdlp(url_input)
 
-        d = json_data.get('data', {})
-        
-        # Validasi: pastikan ada URL video yang valid, bukan audio
-        target_url = get_best_video_url(d)
-        if not target_url:
-            return jsonify({"status": "error", "msg": diagnose_tikwm_error(d)})
+        filesize_mb = f"{round(info['filesize'] / (1024*1024), 2)} MB" if info['filesize'] else "?"
 
         return jsonify({
             "status": "success",
-            "url": target_url,
-            "play": d.get('play'),
-            "hdplay": d.get('hdplay'),
-            "title": d.get('title', 'video'),
-            "author": d.get('author', {}).get('nickname', 'User'),
-            "duration": format_durasi(d.get('duration')),
-            "size": f"{round(d.get('size', 0)/(1024*1024), 2)} MB" if d.get('size') else "?",
-            "cover": d.get('origin_cover') or d.get('cover') or ''
+            "url": info['url_video'],
+            "play": info['url_video'],
+            "hdplay": info['url_video'],
+            "title": info['title'],
+            "author": info['author'],
+            "duration": format_durasi(info['duration']),
+            "size": filesize_mb,
+            "cover": info['thumbnail'],
+            # Sertakan tiktok_url asli untuk fallback di get_video jika CDN expired
+            "tiktok_url": url_input,
         })
     except Exception as e:
+        logger.error(f"💥 Download URL Error: {str(e)}")
         return jsonify({"status": "error", "msg": str(e)})
 
 if __name__ == "__main__":
