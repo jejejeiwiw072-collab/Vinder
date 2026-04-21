@@ -686,51 +686,24 @@
   async function handleRealDownload(dUrl, title) {
     const bubble = createBubble(title);
     try {
-      const response = await fetch(dUrl);
-      if (!response.ok) throw new Error('Server gagal memproses video');
-
-      const reader = response.body.getReader();
-      const contentLength = +response.headers.get('Content-Length');
-      
-      let receivedLength = 0;
-      let chunks = []; 
-      
-      while(true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        receivedLength += value.length;
-        if (contentLength) {
-          bubble.updateProgress((receivedLength / contentLength) * 100);
-        }
-      }
-
-      // Pastikan tipe MIME didefinisikan secara eksplisit sebagai video/mp4
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      
-      // Bersihkan nama file agar tidak ada karakter aneh yang merusak ekstensi
+      // Langsung arahkan browser ke URL proxy backend.
+      // Blob approach tidak bekerja di mobile — tidak trigger save ke gallery.
+      // Dengan cara ini browser handle download native, termasuk Android & iOS.
       const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 50);
+      const a = document.createElement('a');
+      a.href = dUrl;
       a.download = cleanTitle + '_' + Date.now() + '.mp4';
-      
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
       document.body.appendChild(a);
       a.click();
-      
-      // Cleanup
-      setTimeout(() => {
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-      }, 100);
-      
+      setTimeout(() => document.body.removeChild(a), 300);
       bubble.setSuccess();
     } catch (e) {
       console.error('Download Fail:', e);
       bubble.setError(e.message);
     }
   }
-
   function getDownloadUrl(v, resolution) {
     // Logika pemilihan URL: Prioritaskan HD jika mode HYPE aktif
     let vUrl = '';
