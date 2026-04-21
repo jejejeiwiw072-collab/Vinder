@@ -14,40 +14,34 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# Global Session untuk performa dan konsistensi
+session = requests.Session()
+DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+    "Accept": "video/mp4,video/*;q=0.9,audio/*;q=0.8,*/*;q=0.5",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+    "Connection": "keep-alive",
+    "Referer": "https://www.tiktok.com/",
+    "Origin": "https://www.tiktok.com/"
+}
+session.headers.update(DOWNLOAD_HEADERS)
+
 @app.after_request
 def add_header(response):
-    """
-    Menambahkan header untuk mencegah browser melakukan caching.
-    Jika parameter 'refresh' ada, instruksikan browser untuk menghapus seluruh data situs (Hard Refresh).
-    """
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '-1'
-    
-    # Fitur Hard Refresh Otomatis: Hapus cache, cookies, storage, dan executionContexts
     if 'refresh' in request.args:
-        response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage", "executionContexts"'
-        response.headers['Connection'] = 'close' # Putuskan koneksi biar bener-bener fresh
-        
+        response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
     return response
-
-DOWNLOAD_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Range": "bytes=0-",
-    "Referer": "https://www.tiktok.com/",
-    "Origin": "https://www.tiktok.com/",
-}
 
 def format_durasi(detik):
     if detik is None: return "?"
     try:
-        detik = int(detik)
-        m, s = divmod(detik, 60)
+        m, s = divmod(int(detik), 60)
         return f"{m}m{s:02d}s"
-    except:
-        return "?"
+    except: return "?"
 
 @app.route('/')
 def index():
@@ -58,128 +52,95 @@ def search_videos_api():
     data = request.json
     keyword = data.get('keyword')
     limit = data.get('limit', 10)
-    logger.info(f"🔍 Searching for: {keyword} (limit: {limit})")
+    logger.info(f"🔍 Searching: {keyword}")
     try:
-        resp = requests.post("https://www.tikwm.com/api/feed/search", 
-                             data={"keywords": keyword, "count": limit, "HD": 1},
-                             timeout=30)
+        resp = session.post("https://www.tikwm.com/api/feed/search", 
+                           data={"keywords": keyword, "count": limit, "HD": 1},
+                           timeout=30)
         resp.raise_for_status()
         json_data = resp.json()
         
         if json_data.get('code') != 0:
-            msg = json_data.get('msg', 'API TikWM return non-zero code')
-            logger.error(f"❌ TikWM API Error: {msg}")
-            return jsonify({"status": "error", "msg": f"TikWM API: {msg}"})
+            return jsonify({"status": "error", "msg": f"TikWM: {json_data.get('msg')}"})
 
         videos = json_data.get('data', {}).get('videos', [])
         results = []
         for v in videos:
-            cover_url = v.get('origin_cover') or v.get('cover') or ''
-            size_bytes = v.get('size', 0)
-            size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes else "?"
-            
-            # Pastikan ada minimal satu URL play
-            play_url = v.get('play', '')
-            hd_url = v.get('hdplay', '')
-            
             results.append({
                 'title': v.get('title', 'Video TikTok'),
-                'id': v.get('id', ''),
                 'duration': format_durasi(v.get('duration')),
-                'channel': v.get('author', {}).get('nickname', 'User'),
-                'play': play_url,
-                'hdplay': hd_url or play_url, # Fallback ke normal jika HD kosong
-                'cover': cover_url,
-                'size': f"{size_mb} MB"
+                'play': v.get('play', ''),
+                'hdplay': v.get('hdplay', '') or v.get('play', ''),
+                'cover': v.get('origin_cover') or v.get('cover') or '',
+                'size': f"{round(v.get('size', 0)/(1024*1024), 2)} MB" if v.get('size') else "?"
             })
-        logger.info(f"✅ Found {len(results)} videos")
         return jsonify({"status": "success", "data": results})
     except Exception as e:
-        err_msg = f"Search Error: {str(e)}"
-        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "msg": err_msg})
+        return jsonify({"status": "error", "msg": str(e)})
 
 @app.route('/api/get_video')
 def get_video_api():
     video_url = request.args.get('url')
     title = request.args.get('title', 'video')
-    mode = request.args.get('mode', 'HYPE v1.2')
     
-    if not video_url or not video_url.startswith('http'):
-        logger.warning(f"⚠️ Invalid URL: {video_url}")
-        return "URL tidak valid", 400
+    if not video_url: return "URL Kosong", 400
 
-    logger.info(f"📥 Streaming download: {title[:30]}... ({mode})")
+    logger.info(f"📥 Proxying video: {video_url[:60]}...")
     try:
-        # Request ke source dengan header yang lebih kuat
-        r = requests.get(video_url, stream=True, timeout=60, headers=DOWNLOAD_HEADERS)
+        # Coba request pertama
+        r = session.get(video_url, stream=True, timeout=60, allow_redirects=True)
+        
+        # Fallback jika 403/404 (Sering terjadi jika CDN token kadaluarsa)
+        if r.status_code in [403, 404]:
+            logger.warning(f"⚠️ {r.status_code} detected, retrying with fresh session...")
+            r = requests.get(video_url, stream=True, timeout=60, allow_redirects=True, headers=DOWNLOAD_HEADERS)
+            
         r.raise_for_status()
 
-        # Validasi apakah ini benar-benar video (bisa jadi audio/mpeg jika salah link)
-        content_type = r.headers.get('Content-Type', '')
-        if 'video' not in content_type and 'octet-stream' not in content_type:
-            logger.warning(f"⚠️ Source returned unexpected content type: {content_type}")
-            # Kita tetap paksa mp4 jika ukurannya besar, tapi beri peringatan di log
-
-        # Sanitasi judul untuk filename
-        safe_title = re.sub(r'[^a-zA-Z0-9\s_-]', '', title).strip()[:50] or 'video'
-        timestamp = int(time.time())
-        prefix = "HYPE" if "HYPE" in mode else "STD"
-        safe_filename = f"{prefix}_{safe_title}_{timestamp}.mp4"
+        # Pastikan kita mengirimkan MP4
+        safe_title = re.sub(r'[^a-zA-Z0-9]', '_', title)[:40] or 'video'
+        filename = f"VidFinder_{safe_title}_{int(time.time())}.mp4"
 
         def generate():
-            try:
-                # Chunk size lebih kecil (256KB) untuk stabilitas streaming pada koneksi lambat
-                for chunk in r.iter_content(chunk_size=256*1024):
-                    if chunk:
-                        yield chunk
-            except Exception as e:
-                logger.error(f"💥 Streaming interrupted for {safe_filename}: {str(e)}")
+            # Chunk size 512KB seimbang antara speed dan kestabilan
+            for chunk in r.iter_content(chunk_size=512*1024):
+                if chunk: yield chunk
 
-        content_length = r.headers.get('Content-Length')
-        
         headers = {
-            "Content-Disposition": f'attachment; filename="{safe_filename}"',
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Type": "video/mp4",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "X-Content-Type-Options": "nosniff", # Paksa browser ikuti Content-Type kita
+            "Cache-Control": "no-cache",
+            "X-Content-Type-Options": "nosniff",
             "Access-Control-Expose-Headers": "Content-Length"
         }
-        if content_length:
-            headers["Content-Length"] = content_length
+        
+        cl = r.headers.get('Content-Length')
+        if cl: headers["Content-Length"] = cl
 
         return Response(stream_with_context(generate()), headers=headers)
     except Exception as e:
-        err_msg = f"Download Error: {str(e)}"
-        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
-        return err_msg, 500
+        logger.error(f"💥 Proxy Error: {str(e)}")
+        return f"Gagal mengambil video: {str(e)}", 500
 
 @app.route('/api/download_url', methods=['POST'])
 def download_url_api():
     data = request.json
     url_input = data.get('url')
-    logger.info(f"🔗 Processing URL download: {url_input}")
+    logger.info(f"🔗 Processing URL: {url_input}")
     try:
-        resp = requests.post("https://www.tikwm.com/api/", data={"url": url_input, "hd": 1}, timeout=30)
+        resp = session.post("https://www.tikwm.com/api/", data={"url": url_input, "hd": 1}, timeout=30)
         resp.raise_for_status()
         json_data = resp.json()
         
         if json_data.get('code') != 0:
-            msg = json_data.get('msg', 'API TikWM return non-zero code')
-            logger.error(f"❌ TikWM URL Error: {msg}")
-            return jsonify({"status": "error", "msg": f"TikWM: {msg}"})
+            return jsonify({"status": "error", "msg": f"TikWM: {json_data.get('msg')}"})
 
         d = json_data.get('data', {})
         target_url = d.get('hdplay') or d.get('play')
         
         if not target_url:
-            logger.error("❌ No play URL found in TikWM response")
-            return jsonify({"status": "error", "msg": "Video URL tidak ditemukan dalam respon API"})
+            return jsonify({"status": "error", "msg": "Video URL tidak ditemukan"})
 
-        size_bytes = d.get('size', 0)
-        size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes else "?"
-        
-        logger.info(f"✅ URL Resolved: {target_url[:50]}...")
         return jsonify({
             "status": "success",
             "url": target_url,
@@ -188,14 +149,12 @@ def download_url_api():
             "title": d.get('title', 'video'),
             "author": d.get('author', {}).get('nickname', 'User'),
             "duration": format_durasi(d.get('duration')),
-            "size": f"{size_mb} MB",
+            "size": f"{round(d.get('size', 0)/(1024*1024), 2)} MB" if d.get('size') else "?",
             "cover": d.get('origin_cover') or d.get('cover') or ''
         })
     except Exception as e:
-        err_msg = f"URL Resolve Error: {str(e)}"
-        logger.error(f"💥 {err_msg}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "msg": err_msg})
+        return jsonify({"status": "error", "msg": str(e)})
 
 if __name__ == "__main__":
-    logger.info("🚀 VidFinder System Backend Started on port 5000")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), threaded=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, threaded=True)
