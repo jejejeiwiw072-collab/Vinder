@@ -662,11 +662,10 @@
       setSuccess() {
         el.querySelector('.dl-bubble-icon').textContent = '✅';
         el.querySelector('.dl-bubble-icon').className = 'dl-bubble-icon success';
-        sub.textContent = 'Selesai — Menyimpan...';
+        sub.textContent = 'Selesai — Tersimpan!';
         bar.className = 'dl-progress-bar done';
-        setTimeout(() => {
-           triggerHardRefresh();
-        }, 1500);
+        // Auto-close bubble setelah 5 detik, tidak perlu refresh halaman
+        setTimeout(() => fadeOutBubble(el), 5000);
       },
       setError(msg) {
         el.querySelector('.dl-bubble-icon').textContent = '❌';
@@ -679,6 +678,7 @@
 
   function closeBubble(btn) { fadeOutBubble(btn.closest('.dl-bubble')); }
   function fadeOutBubble(el) {
+    if (!el) return;
     el.classList.add('fade-out');
     setTimeout(() => el.remove(), 400);
   }
@@ -687,7 +687,7 @@
     const bubble = createBubble(title);
     try {
       const response = await fetch(dUrl);
-      if (!response.ok) throw new Error('Gagal mendownload file');
+      if (!response.ok) throw new Error('Server gagal memproses video');
 
       const reader = response.body.getReader();
       const contentLength = +response.headers.get('Content-Length');
@@ -705,23 +705,43 @@
         }
       }
 
-      const blob = new Blob(chunks);
+      // Pastikan tipe MIME didefinisikan secara eksplisit sebagai video/mp4
+      const blob = new Blob(chunks, { type: 'video/mp4' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = title.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.mp4';
+      
+      // Bersihkan nama file agar tidak ada karakter aneh yang merusak ekstensi
+      const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase().substring(0, 50);
+      a.download = cleanTitle + '_' + Date.now() + '.mp4';
+      
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      
+      // Cleanup
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 100);
       
       bubble.setSuccess();
     } catch (e) {
+      console.error('Download Fail:', e);
       bubble.setError(e.message);
     }
   }
 
   function getDownloadUrl(v, resolution) {
-    const vUrl = (resolution === 'HYPE v1.2') ? (v.hdplay || v.play) : (v.play || v.hdplay);
+    // Logika pemilihan URL: Prioritaskan HD jika mode HYPE aktif
+    let vUrl = '';
+    if (resolution === 'HYPE v1.2') {
+        vUrl = v.hdplay || v.play || '';
+    } else {
+        vUrl = v.play || v.hdplay || '';
+    }
+    
+    if (!vUrl) return '';
+    
     const t = new Date().getTime();
     return `/api/get_video?url=${encodeURIComponent(vUrl)}&title=${encodeURIComponent(v.title)}&mode=${encodeURIComponent(resolution)}&t=${t}`;
   }
@@ -734,7 +754,7 @@
     const resultsEl = document.getElementById('results');
     const resolution = resSelected['Search'];
 
-      btn.disabled = true;
+    btn.disabled = true;
     btn.textContent = 'Mencari...';
     status.textContent = 'Menghubungi server...';
     resultsEl.innerHTML = '';
