@@ -43,6 +43,57 @@ def format_durasi(detik):
         return f"{m}m{s:02d}s"
     except: return "?"
 
+def is_video_url(url):
+    """Cek apakah URL ini adalah video (bukan audio/musik)."""
+    if not url:
+        return False
+    # URL audio: berakhiran .mp3 atau ada /music/ atau /audio/ di path-nya
+    if url.endswith('.mp3') or '/music/' in url or '/audio/' in url:
+        return False
+    # URL CDN TikTok yang valid punya mime_type=video_mp4
+    if 'mime_type=video_mp4' in url:
+        return True
+    # URL proxy tikwm untuk video
+    if '/video/media/play/' in url:
+        return True
+    # Default: anggap valid, biarkan CDN yang reject kalau memang bukan video
+    return True
+
+def get_best_video_url(data):
+    """Ambil URL video terbaik dari response tikwm, pastikan bukan audio."""
+    for url in [data.get('hdplay'), data.get('play')]:
+        if url and is_video_url(url):
+            return url
+    return None
+
+def fetch_fresh_url(old_url, hd=True):
+    """Fetch URL CDN segar dari tikwm karena token CDN TikTok cepat expire."""
+    try:
+        resp = session.post("https://www.tikwm.com/api/",
+                            data={"url": old_url, "hd": 1 if hd else 0},
+                            timeout=15)
+        resp.raise_for_status()
+        d = resp.json().get('data', {})
+        return get_best_video_url(d) or old_url
+    except Exception as e:
+        logger.warning(f"⚠️ Gagal refresh URL: {e}")
+        return old_url
+
+def diagnose_tikwm_error(data):
+    """Kasih pesan error yang informatif berdasarkan kondisi response tikwm."""
+    if not data:
+        return "Video tidak dapat diakses (mungkin private atau sudah dihapus)"
+    play = data.get('play', '')
+    hdplay = data.get('hdplay', '')
+    music = data.get('music', '')
+    if not play and not hdplay:
+        if music:
+            return "Kreator menonaktifkan download video ini (hanya audio tersedia)"
+        return "Video tidak bisa diunduh — kreator menonaktifkan download atau video bersifat private/geo-lock"
+    if all(not is_video_url(u) for u in [play, hdplay] if u):
+        return "Kreator menonaktifkan download video ini (hanya audio tersedia)"
+    return "Video URL tidak ditemukan"
+
 @app.route('/')
 def index():
     return send_file('vinder.html')
@@ -78,44 +129,6 @@ def search_videos_api():
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)})
 
-def extract_video_id(play_url):
-    """Ekstrak video ID dari URL CDN TikTok atau URL tiktok.com biasa."""
-    # Format: /video/tos/.../VIDEOID/?...
-    match = re.search(r'/([a-f0-9]{32})/', play_url)
-    if match:
-        return match.group(1)
-    # Format URL tiktok.com/video/123456789
-    match = re.search(r'tiktok\.com/.+/video/(\d+)', play_url)
-    if match:
-        return match.group(1)
-    return None
-
-def fetch_fresh_url(old_url, hd=True):
-    """Coba dapatkan URL CDN segar dari tikwm menggunakan URL asli video."""
-    try:
-        resp = session.post("https://www.tikwm.com/api/", 
-                           data={"url": old_url, "hd": 1 if hd else 0}, 
-                           timeout=15)
-        resp.raise_for_status()
-        d = resp.json().get('data', {})
-        fresh = d.get('hdplay') if hd else None
-        return fresh or d.get('play') or old_url
-    except Exception as e:
-        logger.warning(f"⚠️ Gagal refresh URL: {e}")
-        return old_url
-
-@app.route('/api/refresh_url', methods=['POST'])
-def refresh_url_api():
-    """Endpoint untuk mendapatkan URL CDN segar sebelum download."""
-    data = request.json
-    original_url = data.get('url')
-    hd = data.get('hd', True)
-    if not original_url:
-        return jsonify({"status": "error", "msg": "URL kosong"}), 400
-    fresh_url = fetch_fresh_url(original_url, hd)
-    logger.info(f"🔄 Refreshed URL: {fresh_url[:60]}...")
-    return jsonify({"status": "success", "url": fresh_url})
-
 @app.route('/api/get_video')
 def get_video_api():
     video_url = request.args.get('url')
@@ -123,30 +136,29 @@ def get_video_api():
     
     if not video_url: return "URL Kosong", 400
 
+    # Tolak langsung kalau URL yang masuk adalah audio
+    if not is_video_url(video_url):
+        logger.warning(f"🚫 URL bukan video: {video_url[:60]}")
+        return jsonify({"error": "Kreator menonaktifkan download video ini (hanya audio tersedia)"}), 400
+
     logger.info(f"📥 Proxying video: {video_url[:60]}...")
     try:
-        # Coba request pertama
         r = session.get(video_url, stream=True, timeout=60, allow_redirects=True)
         
-        # Jika 403/404 → CDN token expired → fetch URL segar dari tikwm
+        # Jika 403/404 → token CDN expired → fetch URL segar dari tikwm lalu retry
         if r.status_code in [403, 404]:
             logger.warning(f"⚠️ {r.status_code} detected, fetching fresh CDN URL from tikwm...")
             fresh_url = fetch_fresh_url(video_url, hd=True)
             if fresh_url != video_url:
                 logger.info(f"🔄 Retrying with fresh URL...")
                 r = session.get(fresh_url, stream=True, timeout=60, allow_redirects=True)
-            else:
-                # Tetap coba dengan fresh session sebagai last resort
-                r = requests.get(video_url, stream=True, timeout=60, allow_redirects=True, headers=DOWNLOAD_HEADERS)
-            
+
         r.raise_for_status()
 
-        # Pastikan kita mengirimkan MP4
         safe_title = re.sub(r'[^a-zA-Z0-9]', '_', title)[:40] or 'video'
         filename = f"VidFinder_{safe_title}_{int(time.time())}.mp4"
 
         def generate():
-            # Chunk size 512KB seimbang antara speed dan kestabilan
             for chunk in r.iter_content(chunk_size=512*1024):
                 if chunk: yield chunk
 
@@ -180,10 +192,11 @@ def download_url_api():
             return jsonify({"status": "error", "msg": f"TikWM: {json_data.get('msg')}"})
 
         d = json_data.get('data', {})
-        target_url = d.get('hdplay') or d.get('play')
         
+        # Validasi: pastikan ada URL video yang valid, bukan audio
+        target_url = get_best_video_url(d)
         if not target_url:
-            return jsonify({"status": "error", "msg": "Video URL tidak ditemukan"})
+            return jsonify({"status": "error", "msg": diagnose_tikwm_error(d)})
 
         return jsonify({
             "status": "success",
